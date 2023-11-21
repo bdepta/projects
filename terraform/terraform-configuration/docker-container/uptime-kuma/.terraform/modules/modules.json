@@ -1,0 +1,1 @@
+{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"container","Source":"../../../terraform-modules/docker/container","Dir":"../../../terraform-modules/docker/container"},{"Key":"image","Source":"../../../terraform-modules/docker/image","Dir":"../../../terraform-modules/docker/image"}]}
