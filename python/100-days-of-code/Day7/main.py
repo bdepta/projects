@@ -1,4 +1,4 @@
-import random, hangman_art, hangman_words
+import random, os, hangman_art, hangman_words
 #* Step 1 
 #* 1 - Randomly choose a word from the word_list and assign it to a variable called chosen_word.
 #* 2 - Ask the user to guess a letter and assign their answer to a variable called guess. Make guess lowercase.
@@ -32,7 +32,7 @@ def GenerateUnderscores(randomWord):
     underscoresList = ["_"] * k
     return underscoresList
 
-def ReplaceUnderscore(randomWord, underscores, guess, lives):
+def ReplaceUnderscore(randomWord, underscores, guess, lives, previousOnes):       
     letterCounter = 0
     for position in range(len(randomWord)):
         letter = randomWord[position]
@@ -41,48 +41,79 @@ def ReplaceUnderscore(randomWord, underscores, guess, lives):
             underscores[position] = letter
     if letterCounter == 0:
             lives -= 1
-            if lives > 0:
-                print(f'That was a wrong guess.')
-                print(f'Lives remaining: {lives}')
-                PrintStage(lives)
-            else:
-                print(f'Game Over.')
-                print(f'Correct word {randomWord}')
-                exit()
-    return underscores, lives
+            print(f'\nThat was a wrong guess! :(')
+            previousOnes += guess
+    else:
+        print(f'\nThat was a good guess! :)')
+    return underscores, lives, previousOnes
 
-def GuessLetter(previousOnes):
+def GuessLetter(result, previousOnes):
     guess = input("Guess a letter: ")
     guess = guess.lower()
-    check = guess.isnumeric()
-    if check == True:
-        print(f'Sorry your input cannot be a number. Please provide an letter.')
-        guess = GuessLetter()
-    if guess not in previousOnes:
-        previousOnes += guess
+    checkNumeric = guess.isnumeric()
+    checkLength = len(guess)
+    if checkNumeric != True and checkLength == 1:
+        if guess in result or guess in previousOnes:
+            print(f'You already used this letter. Provide different one.')
+            guess = GuessLetter(result, previousOnes)
     else:
-        print(f'You already used this letter.') 
-    return guess, previousOnes
+        print(f'\nSorry your input cannot be a null, number or string containing more than one letter. Please provide an letter.\n')
+        guess = GuessLetter(result, previousOnes)
+    return guess
 
 def PrintStage(lives):
     print(hangman_art.stages[lives])
 
+def RestartGame():
+    restartOption = input("\nDo you want to start again? Please type 'yes' to restart or 'no' to exit the game. \n")
+    restartOption = restartOption.lower()
+    if restartOption == "yes":
+        Game()
+    elif restartOption == "no":
+        exit()
+    else:
+        print("Wrong input! Bye.")
+        exit()
+
 def Game():
-    randomWord = random.choice(hangman_words.wordList)
-    print(randomWord)
-    result = GenerateUnderscores(randomWord)
+    os.system('cls')
+    print(hangman_art.logo + "\n")
+    language = input(f'Do you want to generate word in Polish or English?\n')
+    if language.lower() == "english":
+        randomWord = random.choice(hangman_words.wordListEnglish)
+    elif language.lower() == "polish":
+        randomWord = random.choice(hangman_words.wordListPolish)
+    else:
+        print("Wrong input!")
+        RestartGame()
+    result = GenerateUnderscores(randomWord.lower())
     lives = 7
     previousOnes = ""
+    PrintStage(lives)
+    print(f'Lives remaining: {lives}\n')
+    print(f"{' '.join(result)}\n")
+    print(f'Letters which you already used: {previousOnes.upper()}\n')
     while "_" in result:
-        guess = GuessLetter(previousOnes)
-        previousOnes = guess[1]
-        print(f'Letters which you already used: {previousOnes.upper()}')
-        underscores = ReplaceUnderscore(randomWord, result, guess[0], lives)
+        guess = GuessLetter(result, previousOnes)
+        underscores = ReplaceUnderscore(randomWord, result, guess[0], lives, previousOnes)
+        result = underscores[0]
         lives = underscores[1]
-        print(f"{' '.join(underscores[0])}")
+        previousOnes = underscores[2]
+        if lives <= 7 and lives > 0:
+            os.system('cls')
+            print(hangman_art.logo)
+            PrintStage(lives)
+            print(f'Lives remaining: {lives}\n')
+            print(f"{' '.join(result)}\n")
+        else:
+            print(f'\nCorrect word was {randomWord.lower()}\n')
+            print(f'Game Over.')
+            RestartGame()
+        print(f'Letters which you already used: {previousOnes.upper()}\n')
     print("You beat the game! :)")
+    RestartGame()
 
-print(hangman_art.logo)
+
 Game()
 
 
