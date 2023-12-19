@@ -86,6 +86,7 @@ def Game():
     else:
         print("Wrong input!")
         RestartGame()
+    randomWord = randomWord.lower()
     result = GenerateUnderscores(randomWord.lower())
     lives = 7
     previousOnes = ""
