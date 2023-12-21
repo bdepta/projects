@@ -1,5 +1,5 @@
 
-# TODO Blind Auction Start 
+# * Blind Auction Start 
 # The objective is to write a program that will collect the names and bids of different people. The program should ask for each bidder's name and their bid individually.
 # Welcome to the secret auction program. 
 # What is your name?: Angela

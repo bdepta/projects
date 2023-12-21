@@ -1,4 +1,4 @@
-import art
+import Day10.art as art
 # * Step 1:
 # * 1: Create a function called 'encrypt' that takes the 'text' and 'shift' as inputs.
 # * 2: Inside the 'encrypt' function, shift each letter of the 'text' forwards in the alphabet by the shift amount and print the encrypted text.  
