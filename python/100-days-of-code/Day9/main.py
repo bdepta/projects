@@ -48,7 +48,7 @@ def Winner():
 def Restart():
     newAuction = input("Do you want to start an new auction? Type 'yes' or 'no'.\n").lower()
     if newAuction == "yes":
-        Bid()
+        NewBidder()
     elif newAuction == "no":
         exit()
     else:
