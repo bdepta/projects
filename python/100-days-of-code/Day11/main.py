@@ -143,6 +143,9 @@ def DefineScore(distribution):
     dealerScore = 0
     for i in list(distribution[1].values()):
         playerScore += i
+        if ("A♣" in distribution[1] or "A♦" in distribution[1] or "A♥" in distribution[1] or "A♠" in distribution[1]) and playerScore >= 21:
+            distribution[1].remove(11)
+            distribution[1].append(1)
     for j in list(distribution[2].values()):
         dealerScore += j
     playerHand = ", ".join(list(distribution[1]))
