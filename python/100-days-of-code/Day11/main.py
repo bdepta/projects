@@ -1,10 +1,3 @@
-############### Blackjack Project #####################
-
-#Difficulty Normal 😎: Use all Hints below to complete the project.
-#Difficulty Hard 🤔: Use only Hints 1, 2, 3 to complete the project.
-#Difficulty Extra Hard 😭: Only use Hints 1 & 2 to complete the project.
-#Difficulty Expert 🤯: Only use Hint 1 to complete the project.
-
 ############### Our Blackjack House Rules #####################
 
 ## The deck is unlimited in size. 
@@ -29,7 +22,7 @@ def ResetCounter():
     counter = 0
     return counter
 
-def StartGame(counter):
+def StartBlackJack(counter):
     os.system('cls')
     money = 1000
     wrongInputCounter = counter
@@ -47,9 +40,9 @@ def StartGame(counter):
         wrongInputCounter += 1
         print("Wrong input. Try again.")
         CounterIsExceeded(wrongInputCounter)
-        StartGame(wrongInputCounter)
+        StartBlackJack(wrongInputCounter)
         
-def RestartGame(money, restart):
+def ReStartBlackJack(money, restart):
     wrongInputCounter = restart
     restartOption = input("Do you want to play another round? Type 'yes' to play again or type 'no' to exit the game: ").lower()
     if restartOption == "no":
@@ -66,7 +59,7 @@ def RestartGame(money, restart):
         wrongInputCounter += 1
         print("Wrong input. Try again.")
         CounterIsExceeded(wrongInputCounter)
-        StartGame(wrongInputCounter)
+        ReStartBlackJack(money, wrongInputCounter)
 
 def InitialHand():
     cards = {
@@ -145,6 +138,14 @@ def DefineScore(distribution):
         playerScore += i
     for j in list(distribution[2].values()):
         dealerScore += j
+    if "A♣" in distribution[1] and playerScore >= 21:
+        playerScore -= 10
+    if "A♦" in distribution[1] and playerScore >= 21:
+        playerScore -= 10
+    if  "A♥" in distribution[1] and playerScore >= 21:
+        playerScore -= 10
+    if "A♠" in distribution[1] and playerScore >= 21:
+        playerScore -= 10
     playerHand = ", ".join(list(distribution[1]))
     dealerHand = ", ".join(list(distribution[2]))
     return playerScore, dealerScore, playerHand, dealerHand
@@ -201,12 +202,12 @@ def ChooseAction(counter, distribution, playerTurn, money,bet):
         distribution = PickCard(currentDistribution, playerTurn)
         BlackJack(money,bet, distribution, playerTurn)
     elif action == "d":
-        distribution = PickCard(currentDistribution, playerTurn)
         money = money - bet
         if money < 0:
             print("You don't have enough money to double your bet.")
             money = money + bet 
             ChooseAction(counter = wrongInputCounter, distribution = distribution, playerTurn = playerTurn, money = money, bet =bet)
+            distribution = PickCard(currentDistribution, playerTurn)
         bet = 2 * bet
         distribution = PickCard(currentDistribution, playerTurn)
         BlackJack(money, bet, distribution, playerTurn)
@@ -233,24 +234,21 @@ def BlackJack(money,bet,distribution, playerTurn):
         print(f'You win 🙂.')
         wrongInputCounter = ResetCounter()  
         money = money + (bet+(2*bet))
-        RestartGame(money,wrongInputCounter)
+        ReStartBlackJack(money,wrongInputCounter)
     elif (playerTurn == False and score[0] == score[1]):
         wrongInputCounter = ResetCounter()  
         print(f"It's a draw.")
         money = money + bet
-        RestartGame(money,wrongInputCounter)
+        ReStartBlackJack(money,wrongInputCounter)
     else:
         wrongInputCounter = ResetCounter()  
         print(f'You lose 😒.')
         if money > 0:
-            RestartGame(money,wrongInputCounter)
+            ReStartBlackJack(money,wrongInputCounter)
         else:
             print("You lost all the money. Bye Bye.")
             exit()
 
+StartBlackJack(counter = 0)
 
-StartGame(counter = 0)
 
-# TODO's:
-# Turn Ace into 1 if playerScore > 21 and if it's still player's turn.
-# Allow user to input 3 wrong answers before resetting the game.
