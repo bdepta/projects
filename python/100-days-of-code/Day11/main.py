@@ -143,9 +143,6 @@ def DefineScore(distribution):
     dealerScore = 0
     for i in list(distribution[1].values()):
         playerScore += i
-        if ("A♣" in distribution[1] or "A♦" in distribution[1] or "A♥" in distribution[1] or "A♠" in distribution[1]) and playerScore >= 21:
-            distribution[1].remove(11)
-            distribution[1].append(1)
     for j in list(distribution[2].values()):
         dealerScore += j
     playerHand = ", ".join(list(distribution[1]))
@@ -204,10 +201,13 @@ def ChooseAction(counter, distribution, playerTurn, money,bet):
         distribution = PickCard(currentDistribution, playerTurn)
         BlackJack(money,bet, distribution, playerTurn)
     elif action == "d":
-        #DoubleBet()
-        distribution = PickCard(currentDistribution, playerTurn)
         money = money - bet
+        if money < 0:
+            print("You don't have enough money to double your bet.")
+            money = money + bet 
+            ChooseAction(counter = wrongInputCounter, distribution = distribution, playerTurn = playerTurn, money = money, bet =bet)
         bet = 2 * bet
+        distribution = PickCard(currentDistribution, playerTurn)
         BlackJack(money, bet, distribution, playerTurn)
     else:
         wrongInputCounter += 1
@@ -225,10 +225,10 @@ def BlackJack(money,bet,distribution, playerTurn):
         print(f"Dealer's first card: {score[3]}, current score: {score[1]}\n")
     elif playerTurn == False:
         print(f"Dealer's cards: [{score[3]}], current score: {score[1]}\n")
-    if playerTurn == True and score[0] < 21:
+    if playerTurn == True and score[0] <= 21:
         wrongInputCounter = ResetCounter()  
         ChooseAction(counter = wrongInputCounter, distribution = distribution, playerTurn = playerTurn, money = money, bet =bet)
-    elif (playerTurn == False and score[1] > 21) or (playerTurn == False and score[0] < 21 and score[0] > score[1]):
+    elif (playerTurn == False and score[1] > 21) or (playerTurn == False and score[0] <= 21 and score[0] > score[1]):
         print(f'You win 🙂.')
         wrongInputCounter = ResetCounter()  
         money = money + (bet+(2*bet))
@@ -241,7 +241,15 @@ def BlackJack(money,bet,distribution, playerTurn):
     else:
         wrongInputCounter = ResetCounter()  
         print(f'You lose 😒.')
-        RestartGame(money,wrongInputCounter)
+        if money > 0:
+            RestartGame(money,wrongInputCounter)
+        else:
+            print("You lost all the money. Bye Bye.")
+            exit()
 
 
 StartGame(counter = 0)
+
+# TODO's:
+# Turn Ace into 1 if playerScore > 21 and if it's still player's turn.
+# Allow user to input 3 wrong answers before resetting the game.
