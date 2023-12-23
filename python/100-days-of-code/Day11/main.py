@@ -204,7 +204,6 @@ def ChooseAction(counter, distribution, playerTurn, money,bet):
         distribution = PickCard(currentDistribution, playerTurn)
         BlackJack(money,bet, distribution, playerTurn)
     elif action == "d":
-        #DoubleBet()
         distribution = PickCard(currentDistribution, playerTurn)
         money = money - bet
         bet = 2 * bet
