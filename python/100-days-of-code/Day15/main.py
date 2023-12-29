@@ -63,7 +63,6 @@ def CheckResources(resources, ingredients):
                 print(f"We have no {i}, please refill you coffee machine.")
             Express(resources)
 
-
 def PayForCoffee(cost):
     moneyValue = {
         "quarters": 0.25,
