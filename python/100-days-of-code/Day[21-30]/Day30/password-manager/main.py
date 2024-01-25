@@ -5,7 +5,7 @@ import pyperclip
 import customtkinter
 import json
 
-OUTPUT_FILE = "./data.json"
+OUTPUT_FILE = "./credentials.json"
 
 # ---------------------------- PASSWORD GENERATOR ------------------------------- #
 
