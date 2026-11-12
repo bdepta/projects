@@ -8,6 +8,7 @@
     <AssemblyName>HanaScriptStudio</AssemblyName>
     <RootNamespace>HanaScriptStudio</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\..\assets\icon.ico</ApplicationIcon>
     <Version>1.0.0</Version>
   </PropertyGroup>
 
@@ -17,6 +18,10 @@
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.23" />
     <PackageReference Include="Avalonia.AvaloniaEdit" Version="11.4.1" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AvaloniaResource Include="..\..\assets\icon.png" Link="Assets\icon.png" />
   </ItemGroup>
 
   <ItemGroup>

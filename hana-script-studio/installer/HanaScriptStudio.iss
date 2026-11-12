@@ -22,6 +22,7 @@ SolidCompression=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern
+SetupIconFile=..\assets\icon.ico
 UninstallDisplayName=HANA Script Studio
 UninstallDisplayIcon={app}\HanaScriptStudio.exe
 

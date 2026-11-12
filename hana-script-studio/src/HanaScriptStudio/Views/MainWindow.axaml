@@ -3,6 +3,7 @@
         xmlns:ae="using:AvaloniaEdit"
         x:Class="HanaScriptStudio.Views.MainWindow"
         Title="HANA Script Studio"
+        Icon="avares://HanaScriptStudio/Assets/icon.png"
         Width="1240" Height="780" MinWidth="860" MinHeight="520"
         Background="{DynamicResource AppBgBrush}">
 
