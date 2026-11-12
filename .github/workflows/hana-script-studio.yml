@@ -1,0 +1,49 @@
+name: HANA Script Studio
+
+on:
+  push:
+    paths: ["hana-script-studio/**", ".github/workflows/hana-script-studio.yml"]
+    tags: ["hana-v*"]
+  pull_request:
+    paths: ["hana-script-studio/**"]
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: hana-script-studio
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - run: dotnet test -c Release
+
+  windows-installer:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Publish (self-contained, win-x64)
+        run: dotnet publish src/HanaScriptStudio -c Release -r win-x64 --self-contained -p:DebugType=none -o publish/win-x64
+      - name: Portable zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          Compress-Archive -Path publish/win-x64/* -DestinationPath artifacts/HanaScriptStudio-portable-win-x64.zip
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $v = if ($env:GITHUB_REF -like 'refs/tags/hana-v*') { $env:GITHUB_REF_NAME.Substring(6) } else { "0.0.0-dev" }
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$v" installer\HanaScriptStudio.iss
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HanaScriptStudio-windows
+          path: hana-script-studio/artifacts/*

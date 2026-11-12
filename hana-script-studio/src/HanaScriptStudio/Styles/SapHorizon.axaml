@@ -1,0 +1,140 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Styles.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Light">
+          <Color x:Key="ShellColor">#1B2A3A</Color>
+          <Color x:Key="Shell2Color">#26384B</Color>
+          <Color x:Key="ShellFgColor">#EAF0F6</Color>
+          <Color x:Key="ShellDimColor">#93A6B9</Color>
+          <Color x:Key="AccentColor">#0A6ED1</Color>
+          <Color x:Key="AccentInkColor">#FFFFFF</Color>
+          <Color x:Key="AccentSoftColor">#E3EEFB</Color>
+          <Color x:Key="AppBgColor">#EEF1F4</Color>
+          <Color x:Key="PanelColor">#FFFFFF</Color>
+          <Color x:Key="Panel2Color">#F7F8FA</Color>
+          <Color x:Key="LineColor">#D8DEE5</Color>
+          <Color x:Key="TextColor">#1B2A3A</Color>
+          <Color x:Key="DimColor">#617083</Color>
+          <Color x:Key="EditColor">#E9730C</Color>
+          <Color x:Key="EditBgColor">#FFEBD6</Color>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Dark">
+          <Color x:Key="ShellColor">#0C1520</Color>
+          <Color x:Key="Shell2Color">#18283A</Color>
+          <Color x:Key="ShellFgColor">#EAF0F6</Color>
+          <Color x:Key="ShellDimColor">#7F93A7</Color>
+          <Color x:Key="AccentColor">#5AA6F5</Color>
+          <Color x:Key="AccentInkColor">#06182B</Color>
+          <Color x:Key="AccentSoftColor">#16304F</Color>
+          <Color x:Key="AppBgColor">#111A25</Color>
+          <Color x:Key="PanelColor">#182231</Color>
+          <Color x:Key="Panel2Color">#142030</Color>
+          <Color x:Key="LineColor">#2A3949</Color>
+          <Color x:Key="TextColor">#E4EAF0</Color>
+          <Color x:Key="DimColor">#92A3B5</Color>
+          <Color x:Key="EditColor">#F29A4A</Color>
+          <Color x:Key="EditBgColor">#3F2A14</Color>
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+
+      <SolidColorBrush x:Key="ShellBrush" Color="{DynamicResource ShellColor}" />
+      <SolidColorBrush x:Key="Shell2Brush" Color="{DynamicResource Shell2Color}" />
+      <SolidColorBrush x:Key="ShellFgBrush" Color="{DynamicResource ShellFgColor}" />
+      <SolidColorBrush x:Key="ShellDimBrush" Color="{DynamicResource ShellDimColor}" />
+      <SolidColorBrush x:Key="AccentBrush" Color="{DynamicResource AccentColor}" />
+      <SolidColorBrush x:Key="AccentInkBrush" Color="{DynamicResource AccentInkColor}" />
+      <SolidColorBrush x:Key="AccentSoftBrush" Color="{DynamicResource AccentSoftColor}" />
+      <SolidColorBrush x:Key="AppBgBrush" Color="{DynamicResource AppBgColor}" />
+      <SolidColorBrush x:Key="PanelBrush" Color="{DynamicResource PanelColor}" />
+      <SolidColorBrush x:Key="Panel2Brush" Color="{DynamicResource Panel2Color}" />
+      <SolidColorBrush x:Key="LineBrush" Color="{DynamicResource LineColor}" />
+      <SolidColorBrush x:Key="TextBrush" Color="{DynamicResource TextColor}" />
+      <SolidColorBrush x:Key="DimBrush" Color="{DynamicResource DimColor}" />
+      <SolidColorBrush x:Key="EditBrush" Color="{DynamicResource EditColor}" />
+      <SolidColorBrush x:Key="EditBgBrush" Color="{DynamicResource EditBgColor}" />
+    </ResourceDictionary>
+  </Styles.Resources>
+
+  <Style Selector="Window">
+    <Setter Property="FontFamily" Value="Segoe UI, Inter, Noto Sans, sans-serif" />
+    <Setter Property="FontSize" Value="13" />
+  </Style>
+
+  <Style Selector="Button.action">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+    <Setter Property="Padding" Value="11,6" />
+    <Setter Property="CornerRadius" Value="5" />
+  </Style>
+  <Style Selector="Button.action:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource AppBgBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}" />
+  </Style>
+  <Style Selector="Button.primary">
+    <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource AccentInkBrush}" />
+    <Setter Property="FontWeight" Value="Medium" />
+  </Style>
+  <Style Selector="Button.primary:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+    <Setter Property="Opacity" Value="0.9" />
+  </Style>
+  <Style Selector="Button.shell">
+    <Setter Property="Background" Value="{DynamicResource Shell2Brush}" />
+    <Setter Property="Foreground" Value="{DynamicResource ShellFgBrush}" />
+    <Setter Property="Padding" Value="10,4" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="CornerRadius" Value="4" />
+  </Style>
+  <Style Selector="Button.shell:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="#34506B" />
+    <Setter Property="Foreground" Value="{DynamicResource ShellFgBrush}" />
+  </Style>
+  <Style Selector="Button.tabclose">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Foreground" Value="{DynamicResource DimBrush}" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="Width" Value="18" />
+    <Setter Property="Height" Value="18" />
+    <Setter Property="FontSize" Value="10" />
+    <Setter Property="CornerRadius" Value="3" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+  <Style Selector="Button.tabclose:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource AppBgBrush}" />
+    <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+  </Style>
+  <Style Selector="Border.tab">
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+  <Style Selector="Border.tab:pointerover">
+    <Setter Property="Background" Value="{DynamicResource Panel2Brush}" />
+  </Style>
+  <Style Selector="Border.tab.selected">
+    <Setter Property="Background" Value="{DynamicResource PanelBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    <Setter Property="BorderThickness" Value="0,2,0,0" />
+  </Style>
+  <Style Selector="ListBoxItem">
+    <Setter Property="Padding" Value="10,4" />
+    <Setter Property="Margin" Value="0" />
+    <Setter Property="CornerRadius" Value="0" />
+  </Style>
+  <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource PanelBrush}" />
+  </Style>
+  <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource PanelBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    <Setter Property="BorderThickness" Value="3,0,0,0" />
+  </Style>
+  <Style Selector="ListBoxItem:selected:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource PanelBrush}" />
+  </Style>
+</Styles>

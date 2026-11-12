@@ -1,0 +1,135 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ae="using:AvaloniaEdit"
+        x:Class="HanaScriptStudio.Views.MainWindow"
+        Title="HANA Script Studio"
+        Width="1240" Height="780" MinWidth="860" MinHeight="520"
+        Background="{DynamicResource AppBgBrush}">
+
+  <Grid RowDefinitions="Auto,*,Auto">
+
+    <!-- App bar -->
+    <Border Grid.Row="0" Background="{DynamicResource ShellBrush}" Height="40">
+      <Grid ColumnDefinitions="Auto,*,Auto,Auto" Margin="14,0,10,0">
+        <Polygon Points="0,0 20,0 12.5,14 0,14" Fill="{DynamicResource AccentBrush}" VerticalAlignment="Center" Margin="0,0,10,0" />
+        <TextBlock Grid.Column="1" Text="HANA Script Studio" Foreground="{DynamicResource ShellFgBrush}" FontWeight="SemiBold" VerticalAlignment="Center" />
+        <TextBlock Grid.Column="2" x:Name="FolderText" Foreground="{DynamicResource ShellDimBrush}" FontFamily="Cascadia Mono, Consolas, Menlo, monospace"
+                   FontSize="11.5" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="460" Margin="0,0,10,0" />
+        <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+          <Button Classes="shell" x:Name="ThemeButton" Content="Theme: System" />
+          <Button Classes="shell" x:Name="ChangeFolderButton" Content="Change folder" />
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- Body -->
+    <Grid Grid.Row="1" ColumnDefinitions="320,*">
+
+      <!-- Script library -->
+      <Border Grid.Column="0" Background="{DynamicResource Panel2Brush}" BorderBrush="{DynamicResource LineBrush}" BorderThickness="0,0,1,0">
+        <Grid RowDefinitions="Auto,Auto,*">
+          <StackPanel Grid.Row="0" Margin="12,12,12,6" Spacing="8">
+            <TextBox x:Name="SearchBox" Watermark="Search scripts by name or content" />
+            <CheckBox x:Name="NameOnlyBox" Content="Match file names only" FontSize="12" />
+          </StackPanel>
+          <TextBlock Grid.Row="1" x:Name="CountText" Margin="12,0,12,8" FontSize="12" Foreground="{DynamicResource DimBrush}" />
+          <Border Grid.Row="2" BorderBrush="{DynamicResource LineBrush}" BorderThickness="0,1,0,0">
+            <Grid>
+              <ListBox x:Name="ScriptList" Background="Transparent" Padding="0">
+                <ListBox.ItemTemplate>
+                  <DataTemplate>
+                    <StackPanel Spacing="1" Margin="2,3">
+                      <Grid ColumnDefinitions="Auto,*,Auto">
+                        <TextBlock Text="{Binding Prefix}" Foreground="{DynamicResource DimBrush}" FontFamily="Cascadia Mono, Consolas, Menlo, monospace" FontSize="12" />
+                        <TextBlock Grid.Column="1" Text="{Binding BaseName}" FontWeight="Medium" FontFamily="Cascadia Mono, Consolas, Menlo, monospace" FontSize="12" TextTrimming="CharacterEllipsis" />
+                        <Ellipse Grid.Column="2" Width="7" Height="7" Fill="{DynamicResource EditBrush}" Margin="8,0,0,0" IsVisible="{Binding IsModified}" />
+                      </Grid>
+                      <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Text="{Binding Folder}" FontSize="11.5" Foreground="{DynamicResource DimBrush}" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Grid.Column="1" Text="{Binding Version}" FontSize="11.5" Foreground="{DynamicResource DimBrush}" />
+                      </Grid>
+                    </StackPanel>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+              <TextBlock x:Name="NoResultsText" Text="No scripts match your search." IsVisible="False" Margin="12,16" Foreground="{DynamicResource DimBrush}" TextWrapping="Wrap" />
+            </Grid>
+          </Border>
+        </Grid>
+      </Border>
+
+      <!-- Editor area -->
+      <Grid Grid.Column="1" RowDefinitions="Auto,Auto,*" Background="{DynamicResource PanelBrush}">
+
+        <!-- Tabs -->
+        <Border Grid.Row="0" Background="{DynamicResource AppBgBrush}" Padding="8,6,8,0">
+          <ScrollViewer HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled">
+            <ItemsControl x:Name="TabStrip">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="2" /></ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Border Classes="tab" Padding="12,7,6,7" CornerRadius="6,6,0,0" Cursor="Hand" Tag="{Binding}"
+                          Classes.selected="{Binding IsSelected}">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <TextBlock Text="{Binding Title}" VerticalAlignment="Center" />
+                      <Ellipse Width="7" Height="7" Fill="{DynamicResource EditBrush}" IsVisible="{Binding IsModified}" VerticalAlignment="Center" />
+                      <Button Classes="tabclose" Content="✕" Tag="{Binding}" />
+                    </StackPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </Border>
+
+        <!-- Action bar -->
+        <Border Grid.Row="1" BorderBrush="{DynamicResource LineBrush}" BorderThickness="0,1">
+          <Grid ColumnDefinitions="Auto,Auto,Auto,*" Margin="12,8">
+            <Button Grid.Column="0" Classes="action primary" x:Name="JumpButton" Content="Go to modification section" Margin="0,0,10,0" />
+            <Button Grid.Column="1" Classes="action" x:Name="ResetButton" Content="Reset to original" Margin="0,0,6,0" />
+            <Button Grid.Column="2" Classes="action" x:Name="CopyButton" Content="Copy script" />
+            <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right" VerticalAlignment="Center">
+              <Border Width="10" Height="10" CornerRadius="2" Background="{DynamicResource EditBgBrush}" BorderBrush="{DynamicResource EditBrush}" BorderThickness="1" />
+              <TextBlock x:Name="SectionInfo" FontSize="12" Foreground="{DynamicResource DimBrush}" />
+            </StackPanel>
+          </Grid>
+        </Border>
+
+        <!-- Editor + section rail -->
+        <Grid Grid.Row="2">
+          <ae:TextEditor x:Name="Editor" Background="{DynamicResource PanelBrush}" Foreground="{DynamicResource TextBrush}"
+                         FontFamily="Cascadia Mono, Consolas, Menlo, DejaVu Sans Mono, monospace" FontSize="13"
+                         ShowLineNumbers="True" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+                         WordWrap="False" IsVisible="False" />
+          <Border x:Name="RailTrack" Width="6" HorizontalAlignment="Right" VerticalAlignment="Stretch" Margin="0,8,16,8" CornerRadius="3"
+                  Background="{DynamicResource Panel2Brush}" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1"
+                  Opacity="0" Cursor="Hand">
+            <Canvas x:Name="RailCanvas">
+              <Border x:Name="RailTick" Background="{DynamicResource EditBrush}" CornerRadius="3" Width="6" />
+            </Canvas>
+          </Border>
+          <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="6" MaxWidth="360">
+            <TextBlock Text="Open a script to start" FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Center" />
+            <TextBlock Text="Pick a script from the list on the left. You can keep several scripts open in tabs." Foreground="{DynamicResource DimBrush}" TextWrapping="Wrap" TextAlignment="Center" />
+          </StackPanel>
+          <Border x:Name="Toast" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,24,16" Padding="14,9" CornerRadius="5"
+                  Background="{DynamicResource ShellBrush}" BorderBrush="{DynamicResource AccentBrush}" BorderThickness="3,0,0,0" IsVisible="False" IsHitTestVisible="False">
+            <TextBlock x:Name="ToastText" Foreground="{DynamicResource ShellFgBrush}" />
+          </Border>
+        </Grid>
+      </Grid>
+    </Grid>
+
+    <!-- Status bar -->
+    <Border Grid.Row="2" Background="{DynamicResource Shell2Brush}" Padding="14,5">
+      <Grid ColumnDefinitions="Auto,Auto,Auto,*">
+        <TextBlock Text="UTF-8" Foreground="{DynamicResource ShellDimBrush}" FontSize="12" Margin="0,0,18,0" />
+        <TextBlock Grid.Column="1" Text="SQL" Foreground="{DynamicResource ShellDimBrush}" FontSize="12" Margin="0,0,18,0" />
+        <TextBlock Grid.Column="2" x:Name="PosText" Text="Ln 1, Col 1" Foreground="{DynamicResource ShellDimBrush}" FontSize="12" />
+        <TextBlock Grid.Column="3" x:Name="StateText" Text="No changes" Foreground="{DynamicResource ShellDimBrush}" FontSize="12" HorizontalAlignment="Right" />
+      </Grid>
+    </Border>
+  </Grid>
+</Window>
