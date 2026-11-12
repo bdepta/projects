@@ -1,87 +1,93 @@
 # HANA Script Studio
 
-Szybka aplikacja okienkowa do pracy ze skryptami SQL dla SAP HANA (kolekcja „SQL Statement Collection", SAP Note 1969700). Przeglądasz katalog ze skryptami, filtrujesz je po słowie, otwierasz kilka naraz w zakładkach, zmieniasz parametry w sekcji **Modification section** i kopiujesz gotowy skrypt do schowka. Oryginalne pliki nie są zmieniane, dopóki sam nie zapiszesz (Ctrl+S).
+A fast desktop app for working with SAP HANA SQL scripts, such as the "SQL Statement Collection" from SAP Note 1969700. Browse a folder of scripts, filter them by a word, keep several open in tabs, change the parameters in the **Modification section**, and copy the finished script to the clipboard. Your original files are never changed until you save them yourself (Ctrl+S).
 
-Interfejs aplikacji jest po angielsku. Aplikacja jest napisana w C# (.NET 8) z użyciem Avalonia UI i edytora AvaloniaEdit. Działa na Windows, a ten sam kod można zbudować także na macOS i Linux.
+The app is written in C# (.NET 8) with Avalonia UI and the AvaloniaEdit editor. It targets Windows first. The same code can be built for macOS and Linux.
 
-## Instalacja (Windows)
+## Installation (Windows)
 
-### Wariant 1: instalator (zalecany)
+### Option 1: installer (recommended)
 
-1. Pobierz `HanaScriptStudio-Setup-<wersja>.exe` (z zakładki **Actions** / **Releases** repozytorium, patrz „Skąd wziąć instalator" niżej).
-2. Uruchom plik i przejdź kreator: **Next → Install → Finish**.
-3. Instalacja jest dla bieżącego użytkownika, więc nie wymaga praw administratora. Środowisko .NET jest w paczce i nie trzeba go instalować osobno.
-4. Uruchom **HANA Script Studio** z menu Start lub z ikony na pulpicie.
+1. Download `HanaScriptStudio-Setup-<version>.exe` (see "Where to get the installer" below).
+2. Run it and click through the wizard: **Next → Install → Finish**.
+3. The app installs for your Windows account only, so no administrator rights are needed. .NET is bundled, so there is nothing else to install.
+4. Start **HANA Script Studio** from the Start menu or the desktop shortcut.
 
-Odinstalowanie: **Ustawienia → Aplikacje → HANA Script Studio → Odinstaluj**.
+To uninstall: **Settings → Apps → HANA Script Studio → Uninstall**.
 
-Jeśli Windows SmartScreen pokaże ostrzeżenie „Nieznany wydawca" (instalator nie jest podpisany certyfikatem), wybierz **Więcej informacji → Uruchom mimo to**.
+The installer is not code-signed, so Windows SmartScreen may show "Unknown publisher". Click **More info → Run anyway**.
 
-### Wariant 2: wersja portable
+### Option 2: portable version
 
-1. Pobierz `HanaScriptStudio-portable-win-x64.zip`.
-2. Rozpakuj do dowolnego folderu i uruchom `HanaScriptStudio.exe`. Instalacja nie jest potrzebna.
+1. Download `HanaScriptStudio-portable-win-x64.zip`.
+2. Unzip it to any folder and run `HanaScriptStudio.exe`. No installation is needed.
 
-### Skąd wziąć instalator
+### Where to get the installer
 
-Instalator i wersję portable buduje automatycznie GitHub Actions (workflow `HANA Script Studio`):
+Either build it yourself on a Windows PC with one command (needs [.NET SDK 8](https://dotnet.microsoft.com/download/dotnet/8.0) and, for the installer, [Inno Setup 6](https://jrsoftware.org/isdl.php)):
 
-- po każdym pushu zmieniającym katalog `hana-script-studio/` pliki są dostępne jako artefakt `HanaScriptStudio-windows` w zakładce **Actions**,
-- aby wydać wersję, utwórz tag, np. `git tag hana-v1.0.0 && git push origin hana-v1.0.0`. Nazwa pliku instalatora zawiera wtedy numer wersji.
+```powershell
+cd hana-script-studio
+.\build-windows.ps1 -Version 1.0.0
+```
 
-## Użycie
+The files appear in `artifacts\`: `HanaScriptStudio-Setup-1.0.0.exe` and `HanaScriptStudio-portable-win-x64.zip`. Without Inno Setup the script still creates the portable zip, and you can start the app directly from `publish\win-x64\HanaScriptStudio.exe`.
 
-1. **Pierwsze uruchomienie.** Aplikacja prosi o wskazanie katalogu ze skryptami (np. rozpakowana kolekcja SAP). Wybór zostaje zapamiętany. Katalog zmienisz przyciskiem **Change folder**. Wczytywane są pliki `.txt` i `.sql` ze wszystkich podkatalogów.
-2. **Szukanie.** Wpisz słowo w polu wyszukiwania po lewej. Lista zawęża się na bieżąco i uwzględnia nazwę pliku oraz treść skryptu. Kilka słów oznacza, że wszystkie muszą wystąpić. Zaznacz **Match file names only**, jeśli chcesz szukać tylko w nazwach. Skrót: **Ctrl+F**.
-3. **Otwieranie.** Kliknij skrypt na liście, a otworzy się w nowej zakładce. Możesz mieć otwartych wiele skryptów. Kropka przy nazwie oznacza niezapisane zmiany.
-4. **Edycja.** Zmieniaj skrypt w edytorze. Sekcja modyfikacji jest podświetlona na pomarańczowo, a wąski pasek przy prawej krawędzi edytora pokazuje jej położenie w pliku (kliknięcie w niego przenosi do sekcji).
-5. **Przyciski nad edytorem:**
-   - **Go to modification section** przenosi kursor do linii z `Modification section`.
-   - **Reset to original** wraca do treści pliku z dysku i usuwa wszystkie zmiany w tym skrypcie.
-   - **Copy script** kopiuje cały, aktualny (zmieniony) skrypt do schowka. Wklej go w narzędziu, w którym uruchamiasz SQL (np. HANA Studio, SAP HANA Cockpit, DBeaver).
-6. **Zapis.** Zmiany są tylko kopią roboczą. **Ctrl+S** zapisuje je do pliku na dysku. Przy zamykaniu zakładki lub okna z niezapisanymi zmianami aplikacja zapyta, co zrobić.
+Or use GitHub Actions. The workflow `HANA Script Studio` builds the same files and publishes them as the artifact `HanaScriptStudio-windows` on the **Actions** tab. To get a versioned installer, push a tag such as `hana-v1.0.0`:
 
-Skróty: `Ctrl+F` szukaj, `Ctrl+S` zapisz, `Ctrl+W` zamknij zakładkę.
+```bash
+git tag hana-v1.0.0 && git push origin hana-v1.0.0
+```
 
-Przycisk **Theme** w prawym górnym rogu przełącza motyw System / Light / Dark. Ustawienia (ostatni katalog, motyw) są w `%APPDATA%\HanaScriptStudio\settings.json`.
+## Usage
 
-### Jak aplikacja rozpoznaje sekcję modyfikacji
+1. **First start.** The app asks for the folder that holds your scripts (for example the unpacked SAP collection). Your choice is remembered. Change it later with **Change folder**. All `.txt` and `.sql` files in the folder and its subfolders are loaded.
+2. **Search.** Type a word in the search box on the left. The list narrows as you type and looks at file names and script content. With several words, all of them must appear. Tick **Match file names only** to search names only. Shortcut: **Ctrl+F**.
+3. **Open scripts.** Click a script in the list to open it in a new tab. You can keep many scripts open. A dot next to the name means unsaved changes.
+4. **Edit.** Change the script in the editor. The modification section is highlighted in orange, and the slim bar at the right edge of the editor shows where it sits in the file. Click the bar to jump there.
+5. **Buttons above the editor:**
+   - **Go to modification section** moves the cursor to the `Modification section` line.
+   - **Reset to original** restores the file as it is on disk and discards all edits to that script.
+   - **Copy script** copies the whole, current (edited) script to the clipboard. Paste it into the tool where you run your SQL, such as SAP HANA Studio, HANA Cockpit or DBeaver.
+6. **Save.** Edits are a working copy only. **Ctrl+S** writes them to the file. If you close a tab or the window with unsaved changes, the app asks what to do.
 
-Sekcja zaczyna się w pierwszej linii zawierającej `Modification section` (wielkość liter nie ma znaczenia) i kończy przed linią zawierającą `Internal section`. Jeśli skrypt nie ma takiej sekcji, przycisk jest nieaktywny, a obok widać informację o jej braku.
+Shortcuts: `Ctrl+F` search, `Ctrl+S` save, `Ctrl+W` close tab.
 
-## Budowanie ze źródeł
+The **Theme** button in the top right switches between System, Light and Dark. Settings (last folder, theme) are stored in `%APPDATA%\HanaScriptStudio\settings.json`.
 
-Wymagania: [.NET SDK 8](https://dotnet.microsoft.com/download/dotnet/8.0).
+### How the modification section is found
+
+The section starts at the first line that contains `Modification section` (case-insensitive) and ends on the line before the line that contains `Internal section`. If a script has no such section, the jump button is disabled and the bar above the editor says so.
+
+## Building from source
+
+Requirements: [.NET SDK 8](https://dotnet.microsoft.com/download/dotnet/8.0).
 
 ```bash
 cd hana-script-studio
-dotnet test                              # testy logiki (parser sekcji, wyszukiwanie, reset)
-dotnet run --project src/HanaScriptStudio  # uruchom aplikację
+dotnet test                                # logic tests (section parser, search, reset)
+dotnet run --project src/HanaScriptStudio  # run the app
 
-# wersja do dystrybucji dla Windows (self-contained)
+# self-contained build for Windows
 dotnet publish src/HanaScriptStudio -c Release -r win-x64 --self-contained -p:DebugType=none -o publish/win-x64
 ```
 
-Instalator budujesz w [Inno Setup 6](https://jrsoftware.org/isinfo.php) (Windows):
+On macOS or Linux use `-r osx-arm64`, `-r osx-x64` or `-r linux-x64`. Installers for those systems are not prepared yet.
 
-```powershell
-iscc /DAppVersion=1.0.0 installer\HanaScriptStudio.iss   # wynik w artifacts\
-```
-
-Na macOS lub Linuksie użyj odpowiednio `-r osx-arm64`, `-r osx-x64` lub `-r linux-x64`. Pakiety instalacyjne dla tych systemów nie są jeszcze przygotowane.
-
-## Struktura projektu
+## Project layout
 
 ```
 hana-script-studio/
-├── src/HanaScriptStudio.Core/   logika bez UI: indeks i wyszukiwanie, parser sekcji, dokument, ustawienia
-├── src/HanaScriptStudio/        aplikacja Avalonia (okno, style SAP, edytor SQL)
-├── tests/HanaScriptStudio.Core.Tests/   testy xUnit
-└── installer/                   skrypt instalatora Inno Setup
+├── src/HanaScriptStudio.Core/   UI-free logic: index and search, section parser, document, settings
+├── src/HanaScriptStudio/        Avalonia app: window, SAP-style theme, SQL editor
+├── tests/HanaScriptStudio.Core.Tests/   xUnit tests
+├── assets/                      app icon (icon.ico, icon.png) and the script that generates it
+├── installer/                   Inno Setup installer script
+└── build-windows.ps1            one-command Windows build (tests, publish, zip, installer)
 ```
 
-## Wydajność
+## Performance notes
 
-- Treść wszystkich skryptów jest wczytywana raz, równolegle, po wyborze katalogu. Filtrowanie działa potem tylko w pamięci, z krótkim opóźnieniem (150 ms) po wpisaniu znaku.
-- Lista jest wirtualizowana, więc tysiące plików nie spowalniają przewijania.
-- Pliki większe niż 4 MB są widoczne na liście, ale pomijane przy wyszukiwaniu po treści.
+- The content of all scripts is read once, in parallel, after you pick a folder. Filtering then runs in memory only, with a short delay (150 ms) after each keystroke.
+- The list is virtualized, so thousands of files do not slow down scrolling.
+- Files larger than 4 MB appear in the list but are skipped when searching by content.
