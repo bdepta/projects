@@ -2,7 +2,7 @@
 """HANA Script Studio (Python edition).
 
 A small desktop app for working with SAP HANA SQL scripts (SAP Note 1969700,
-"SQL Statement Collection"): pick a folder, filter scripts by a word, keep several
+"SQL Statement Collection"): pick a folder, filter scripts by file name, keep several
 open in tabs, edit the "Modification section", reset it, copy the script.
 
 Pure standard library (Tkinter). Run:  python hana_script_studio.py
@@ -17,37 +17,91 @@ import queue
 import re
 import sys
 import threading
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 APP_NAME = "HANA Script Studio"
 EXTENSIONS = (".txt", ".sql")
-MAX_INDEXED_BYTES = 4 * 1024 * 1024
 
 # ---------------------------------------------------------------------------
 # Logic (no GUI): everything below is covered by test_hana_script_studio.py
 # ---------------------------------------------------------------------------
 
+_FROM_RE = re.compile(r"\bFROM\b", re.I)
+
+
+def _code_only(line: str, in_block: bool) -> tuple[str, bool]:
+    """Return the line without comments and string contents, and whether a /* */ is still open."""
+    out: list[str] = []
+    i, n = 0, len(line)
+    while i < n:
+        if in_block:
+            j = line.find("*/", i)
+            if j < 0:
+                return "".join(out), True
+            i, in_block = j + 2, False
+            out.append(" ")
+        elif line.startswith("/*", i):
+            in_block, i = True, i + 2
+        elif line.startswith("--", i):
+            break
+        elif line[i] == "'":
+            j = i + 1
+            while j < n:
+                if line[j] == "'":
+                    if line[j + 1:j + 2] == "'":
+                        j += 2
+                        continue
+                    break
+                j += 1
+            out.append("''")
+            i = j + 1
+        else:
+            out.append(line[i])
+            i += 1
+    return "".join(out), in_block
+
 
 def find_modification_section(text: str) -> Optional[tuple[int, int]]:
     """Return the zero-based inclusive (first_line, last_line) of the modification section.
 
-    It starts at the first line containing "Modification section" and ends on the line
-    before the line containing "Internal section" (or on the last line if there is none).
+    The section starts at the first line containing "Modification section" and ends on the
+    line before the first FROM that follows it. FROM inside comments or string literals is
+    ignored. If there is no FROM, only the marker line is returned.
     """
     if not text:
         return None
     lines = text.split("\n")
-    start = -1
-    for i, line in enumerate(lines):
-        low = line.lower()
-        if start < 0:
-            if "modification section" in low:
-                start = i
-        elif "internal section" in low:
-            return start, max(start, i - 1)
-    return None if start < 0 else (start, len(lines) - 1)
+    start = next((i for i, ln in enumerate(lines) if "modification section" in ln.lower()), -1)
+    if start < 0:
+        return None
+    _, in_block = _code_only(lines[start], False)
+    for i in range(start + 1, len(lines)):
+        code, in_block = _code_only(lines[i], in_block)
+        m = _FROM_RE.search(code)
+        if m:
+            end = i if code[:m.start()].strip() else i - 1
+            return start, max(start, end)
+    return start, start
+
+
+def match_spans(name: str, query: str) -> list[tuple[int, int]]:
+    """Character ranges of name that match any word of query (case-insensitive, merged)."""
+    low = name.lower()
+    spans: list[tuple[int, int]] = []
+    for word in query.lower().split():
+        i = low.find(word)
+        while i >= 0:
+            spans.append((i, i + len(word)))
+            i = low.find(word, i + len(word))
+    spans.sort()
+    merged: list[tuple[int, int]] = []
+    for s, e in spans:
+        if merged and s <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((s, e))
+    return merged
 
 
 def read_text_file(path: str) -> tuple[str, str, str]:
@@ -66,18 +120,15 @@ def read_text_file(path: str) -> tuple[str, str, str]:
     return text.replace("\r\n", "\n").replace("\r", "\n"), enc, newline
 
 
-@dataclass
 class ScriptEntry:
     """A script file found in the library folder."""
 
-    path: str
-    root: str
-    content: Optional[str] = field(default=None, repr=False)  # lower-cased, for search
-
-    def __post_init__(self) -> None:
-        self.file_name = os.path.basename(self.path)
-        rel = os.path.dirname(os.path.relpath(self.path, self.root))
+    def __init__(self, path: str, root: str) -> None:
+        self.path = path
+        self.file_name = os.path.basename(path)
+        rel = os.path.dirname(os.path.relpath(path, root))
         self.folder = "" if rel == "." else rel
+        self.lower_name = self.file_name.lower()
         stem = os.path.splitext(self.file_name)[0]
         self.prefix = "HANA_" if stem.upper().startswith("HANA_") else ""
         rest = stem[len(self.prefix):]
@@ -87,19 +138,10 @@ class ScriptEntry:
             self.version = rest[i + 1:]
             rest = rest[:i]
         self.base_name = rest
-        self.lower_name = self.file_name.lower()
-
-
-def _load_content(entry: ScriptEntry) -> None:
-    try:
-        if os.path.getsize(entry.path) <= MAX_INDEXED_BYTES:
-            entry.content = read_text_file(entry.path)[0].lower()
-    except OSError:
-        pass
 
 
 class ScriptLibrary:
-    """All scripts of a folder, with their content kept in memory for instant search."""
+    """All scripts of a folder. Searching is by file name only, so loading is instant."""
 
     def __init__(self, root: str, entries: list[ScriptEntry]) -> None:
         self.root = root
@@ -109,30 +151,21 @@ class ScriptLibrary:
     def load(cls, root: str) -> "ScriptLibrary":
         if not os.path.isdir(root):
             raise FileNotFoundError(root)
-        entries: list[ScriptEntry] = []
-        for dirpath, _dirs, files in os.walk(root):
-            for name in files:
-                if name.lower().endswith(EXTENSIONS):
-                    entries.append(ScriptEntry(os.path.join(dirpath, name), root))
+        entries = [
+            ScriptEntry(os.path.join(dirpath, name), root)
+            for dirpath, _dirs, files in os.walk(root)
+            for name in files
+            if name.lower().endswith(EXTENSIONS)
+        ]
         entries.sort(key=lambda e: e.lower_name)
-        with ThreadPoolExecutor(max_workers=min(8, (os.cpu_count() or 2) * 2)) as pool:
-            list(pool.map(_load_content, entries))
         return cls(root, entries)
 
-    def search(self, query: str, name_only: bool = False) -> list[ScriptEntry]:
-        """Entries whose name (and content, unless name_only) contain every word of query."""
+    def search(self, query: str) -> list[ScriptEntry]:
+        """Entries whose file name contains every word of query, ignoring case."""
         words = query.lower().split()
         if not words:
             return list(self.entries)
-        out = []
-        for e in self.entries:
-            for w in words:
-                if w in e.lower_name or (not name_only and e.content is not None and w in e.content):
-                    continue
-                break
-            else:
-                out.append(e)
-        return out
+        return [e for e in self.entries if all(w in e.lower_name for w in words)]
 
 
 class ScriptDocument:
@@ -171,16 +204,14 @@ def settings_path() -> str:
 class Settings:
     last_folder: str = ""
     theme: str = "light"  # light | dark
-    name_only: bool = False
 
     @classmethod
     def load(cls, path: Optional[str] = None) -> "Settings":
         try:
             with open(path or settings_path(), encoding="utf-8") as f:
                 data = json.load(f)
-            known = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
-            return cls(**known)
-        except (OSError, ValueError, TypeError):
+            return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+        except (OSError, ValueError, TypeError, AttributeError):
             return cls()
 
     def save(self, path: Optional[str] = None) -> None:
@@ -206,16 +237,18 @@ except ImportError:  # pragma: no cover
 
 PALETTES = {
     "light": dict(
-        shell="#1B2A3A", shell2="#26384B", shell_fg="#EAF0F6", shell_dim="#93A6B9",
-        accent="#0A6ED1", accent_ink="#FFFFFF", accent_soft="#E3EEFB",
-        bg="#EEF1F4", panel="#FFFFFF", panel2="#F7F8FA", line="#D8DEE5", fg="#1B2A3A", dim="#617083",
-        edit="#E9730C", edit_bg="#FFEBD6", kw="#0A57B8", str="#1F7A44", num="#B5471F", cmt="#7B8794",
+        bg="#F7F7F5", panel="#FFFFFF", line="#E6E6E1", hover="#F0F0EC", sel="#EAF2FC",
+        fg="#1E2430", dim="#6F7785", faint="#B8BDC6",
+        accent="#0A6ED1", accent_hover="#085CB0", accent_ink="#FFFFFF",
+        edit="#E9730C", edit_bg="#FFF1E2",
+        kw="#0A57B8", str="#1F7A44", num="#B5471F", cmt="#8A93A0",
     ),
     "dark": dict(
-        shell="#0C1520", shell2="#18283A", shell_fg="#EAF0F6", shell_dim="#7F93A7",
-        accent="#5AA6F5", accent_ink="#06182B", accent_soft="#16304F",
-        bg="#111A25", panel="#182231", panel2="#142030", line="#2A3949", fg="#E4EAF0", dim="#92A3B5",
-        edit="#F29A4A", edit_bg="#3F2A14", kw="#82BBFF", str="#6ED29A", num="#F29B88", cmt="#7F8E9D",
+        bg="#14171C", panel="#1A1E25", line="#272C35", hover="#222730", sel="#1E2D42",
+        fg="#E6E8EC", dim="#8D95A3", faint="#4B525E",
+        accent="#5AA6F5", accent_hover="#7BB8F7", accent_ink="#06182B",
+        edit="#F29A4A", edit_bg="#3A2A18",
+        kw="#82BBFF", str="#6ED29A", num="#F29B88", cmt="#7F8E9D",
     ),
 }
 
@@ -299,6 +332,56 @@ def _first_font(candidates: tuple[str, ...], default: str) -> str:
     return default
 
 
+def _auto_scrollbar(sb, first, last) -> None:
+    """Scrollbar callback that hides the bar while everything fits."""
+    if float(first) <= 0.0 and float(last) >= 1.0:
+        sb.grid_remove()
+    else:
+        sb.grid()
+    sb.set(first, last)
+
+
+class FlatButton(tk.Label if tk else object):  # type: ignore[misc]
+    """A flat, borderless button. kind: "primary" (filled accent) or "ghost" (text only)."""
+
+    def __init__(self, master, text, command, font, kind="ghost", base="panel", padx=12, pady=6):
+        super().__init__(master, text=text, font=font, padx=padx, pady=pady, bd=0, cursor="hand2")
+        self.command, self.kind, self.base = command, kind, base
+        self.enabled, self.hover, self.p = True, False, PALETTES["light"]
+        self.bind("<Enter>", lambda _e: self._set_hover(True))
+        self.bind("<Leave>", lambda _e: self._set_hover(False))
+        self.bind("<Button-1>", self._click)
+
+    def _set_hover(self, on: bool) -> None:
+        self.hover = on
+        self.paint()
+
+    def _click(self, _e) -> None:
+        if self.enabled:
+            self.command()
+
+    def set_enabled(self, on: bool) -> None:
+        self.enabled = on
+        self.configure(cursor="hand2" if on else "arrow")
+        self.paint()
+
+    def set_palette(self, p: dict) -> None:
+        self.p = p
+        self.paint()
+
+    def paint(self) -> None:
+        p = self.p
+        if self.kind == "primary":
+            if not self.enabled:
+                bg, fg = p["line"], p["dim"]
+            else:
+                bg, fg = (p["accent_hover"] if self.hover else p["accent"]), p["accent_ink"]
+        else:
+            bg = p["hover"] if (self.hover and self.enabled) else p[self.base]
+            fg = p["fg"] if self.enabled else p["faint"]
+        self.configure(bg=bg, fg=fg)
+
+
 class CodeEditor(tk.Frame if tk else object):  # type: ignore[misc]
     """Text editor with line numbers, SQL colouring, modification-section band and rail."""
 
@@ -312,21 +395,21 @@ class CodeEditor(tk.Frame if tk else object):  # type: ignore[misc]
         self._hl_job = None
         self._gutter_job = None
 
-        self.gutter = tk.Canvas(self, width=48, highlightthickness=0, bd=0)
+        self.gutter = tk.Canvas(self, width=52, highlightthickness=0, bd=0)
         self.text = tk.Text(
             self, wrap="none", undo=True, maxundo=-1, font=font, bd=0, highlightthickness=0,
-            padx=8, pady=6, spacing1=1, spacing3=1, tabs=(font.measure("  "),), cursor="xterm",
+            padx=14, pady=8, spacing1=2, spacing3=2, tabs=(font.measure("  "),), cursor="xterm",
         )
-        self.rail = tk.Canvas(self, width=12, highlightthickness=0, bd=0, cursor="hand2")
-        self.vsb = ttk.Scrollbar(self, orient="vertical", command=self.text.yview)
-        self.hsb = ttk.Scrollbar(self, orient="horizontal", command=self.text.xview)
-        self.text.configure(yscrollcommand=self._on_yscroll, xscrollcommand=self.hsb.set)
+        self.rail = tk.Canvas(self, width=10, highlightthickness=0, bd=0, cursor="hand2")
+        self.vsb = ttk.Scrollbar(self, orient="vertical", command=self.text.yview, style="Thin.Vertical.TScrollbar")
+        self.hsb = ttk.Scrollbar(self, orient="horizontal", command=self.text.xview, style="Thin.Horizontal.TScrollbar")
+        self.text.configure(yscrollcommand=self._on_yscroll, xscrollcommand=lambda f, l: _auto_scrollbar(self.hsb, f, l))
 
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
         self.gutter.grid(row=0, column=0, sticky="ns")
         self.text.grid(row=0, column=1, sticky="nsew")
-        self.rail.grid(row=0, column=2, sticky="ns", pady=8)
+        self.rail.grid(row=0, column=2, sticky="ns", pady=10)
         self.vsb.grid(row=0, column=3, sticky="ns")
         self.hsb.grid(row=1, column=0, columnspan=3, sticky="ew")
 
@@ -352,8 +435,8 @@ class CodeEditor(tk.Frame if tk else object):  # type: ignore[misc]
         self.p = p
         self.configure(bg=p["panel"])
         self.text.configure(
-            bg=p["panel"], fg=p["fg"], insertbackground=p["fg"], selectbackground=p["accent_soft"],
-            selectforeground=p["fg"], inactiveselectbackground=p["accent_soft"],
+            bg=p["panel"], fg=p["fg"], insertbackground=p["fg"], selectbackground=p["sel"],
+            selectforeground=p["fg"], inactiveselectbackground=p["sel"],
         )
         self.gutter.configure(bg=p["panel"])
         self.rail.configure(bg=p["panel"])
@@ -363,7 +446,7 @@ class CodeEditor(tk.Frame if tk else object):  # type: ignore[misc]
         t.tag_configure("num", foreground=p["num"])
         t.tag_configure("cmt", foreground=p["cmt"])
         t.tag_configure("section", background=p["edit_bg"])
-        t.tag_configure("flash", background=p["accent_soft"])
+        t.tag_configure("flash", background=p["sel"])
         t.tag_raise("sel")
         self._schedule_gutter()
         self._draw_rail()
@@ -408,7 +491,7 @@ class CodeEditor(tk.Frame if tk else object):  # type: ignore[misc]
             return False
         a = self.section[0] + 1
         self.text.mark_set("insert", f"{a}.0")
-        self.text.yview(f"{max(a - 2, 1)}.0")
+        self.text.yview(f"{max(a - 3, 1)}.0")
         self.text.focus_set()
         self.text.tag_remove("flash", "1.0", "end")
         self.text.tag_add("flash", f"{a}.0", f"{a + 1}.0")
@@ -429,9 +512,7 @@ class CodeEditor(tk.Frame if tk else object):  # type: ignore[misc]
         for tag in ("kw", "str", "num", "cmt"):
             t.tag_remove(tag, "1.0", "end")
         text = self.get_text()
-        starts = [0]
-        for m in re.finditer("\n", text):
-            starts.append(m.end())
+        starts = [0] + [m.end() for m in re.finditer("\n", text)]
 
         def idx(off: int) -> str:
             line = bisect.bisect_right(starts, off) - 1
@@ -445,15 +526,14 @@ class CodeEditor(tk.Frame if tk else object):  # type: ignore[misc]
             return i >= 0 and off < comments[i][1]
 
         for m in TOKEN_RE.finditer(text):
-            if in_comment(m.start()):
-                continue
-            t.tag_add(m.lastgroup, idx(m.start()), idx(m.end()))
+            if not in_comment(m.start()):
+                t.tag_add(m.lastgroup, idx(m.start()), idx(m.end()))
         for s, e in comments:
             t.tag_add("cmt", idx(s), idx(e))
 
     # -- gutter and rail ----------------------------------------------------
     def _on_yscroll(self, first, last) -> None:
-        self.vsb.set(first, last)
+        _auto_scrollbar(self.vsb, first, last)
         self._schedule_gutter()
 
     def _schedule_gutter(self) -> None:
@@ -464,7 +544,7 @@ class CodeEditor(tk.Frame if tk else object):  # type: ignore[misc]
         self._gutter_job = None
         c, t, p = self.gutter, self.text, self.p
         total = int(t.index("end-1c").split(".")[0])
-        width = self.font.measure("0") * max(3, len(str(total))) + 22
+        width = self.font.measure("0") * max(3, len(str(total))) + 26
         if int(c["width"]) != width:
             c.configure(width=width)
         c.delete("all")
@@ -477,8 +557,8 @@ class CodeEditor(tk.Frame if tk else object):  # type: ignore[misc]
             y, h = info[1], info[3]
             ln = int(i.split(".")[0])
             if self.section and self.section[0] + 1 <= ln <= self.section[1] + 1:
-                c.create_rectangle(width - 4, y, width, y + h, fill=p["edit"], width=0)
-            c.create_text(width - 12, y + h / 2, text=str(ln), anchor="e", fill=p["cmt"], font=self.font)
+                c.create_rectangle(width - 6, y, width - 4, y + h, fill=p["edit"], width=0)
+            c.create_text(width - 16, y + h / 2, text=str(ln), anchor="e", fill=p["faint"], font=self.font)
             prev = i
             i = t.index(f"{i}+1line")
 
@@ -490,49 +570,49 @@ class CodeEditor(tk.Frame if tk else object):  # type: ignore[misc]
             return
         total = int(self.text.index("end-1c").split(".")[0])
         a, b = self.section
-        c.create_rectangle(3, 0, 9, h - 1, fill=p["panel2"], outline=p["line"])
+        c.create_line(5, 0, 5, h, fill=p["line"])
         y0 = a / total * (h - 2)
         y1 = max(y0 + 4, (b + 1) / total * (h - 2))
-        c.create_rectangle(3, y0, 9, y1, fill=p["edit"], width=0)
+        c.create_rectangle(3, y0, 7, y1, fill=p["edit"], width=0)
 
 
 class StartDialog(tk.Toplevel if tk else object):  # type: ignore[misc]
     """Asks for the scripts folder. Result is stored in self.result (None if cancelled)."""
 
-    def __init__(self, master, palette: dict, ui_font, initial: str):
+    def __init__(self, master, palette: dict, fonts: dict, initial: str):
         super().__init__(master)
-        p = palette
+        p = self.p = palette
         self.result: Optional[str] = None
         self.title("Select scripts folder")
         self.configure(bg=p["panel"])
         self.resizable(False, False)
         self.transient(master)
 
-        tk.Label(self, text="Select the folder with your SAP HANA SQL scripts", bg=p["panel"], fg=p["fg"],
-                 font=(ui_font, 12, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", padx=20, pady=(18, 4))
-        tk.Label(self, text="All .txt and .sql files in it and its subfolders will be loaded.", bg=p["panel"],
-                 fg=p["dim"], font=(ui_font, 10)).grid(row=1, column=0, columnspan=2, sticky="w", padx=20)
+        tk.Label(self, text="Select your scripts folder", bg=p["panel"], fg=p["fg"], font=fonts["title"]
+                 ).grid(row=0, column=0, columnspan=2, sticky="w", padx=24, pady=(22, 2))
+        tk.Label(self, text="All .txt and .sql files in it and its subfolders will be listed.", bg=p["panel"],
+                 fg=p["dim"], font=fonts["small"]).grid(row=1, column=0, columnspan=2, sticky="w", padx=24)
 
         self.var = tk.StringVar(value=initial)
-        self.entry = tk.Entry(self, textvariable=self.var, width=62, relief="flat", bg=p["bg"], fg=p["fg"],
+        self.entry = tk.Entry(self, textvariable=self.var, width=60, relief="flat", bg=p["bg"], fg=p["fg"],
                               insertbackground=p["fg"], highlightthickness=1, highlightbackground=p["line"],
-                              highlightcolor=p["accent"], font=(ui_font, 10))
-        self.entry.grid(row=2, column=0, sticky="ew", padx=(20, 8), pady=14, ipady=5)
-        browse = tk.Button(self, text="Browse…", command=self._browse, relief="flat", bg=p["panel"], fg=p["fg"],
-                           highlightthickness=1, highlightbackground=p["line"], padx=12, pady=4, font=(ui_font, 10))
-        browse.grid(row=2, column=1, padx=(0, 20))
+                              highlightcolor=p["accent"], font=fonts["ui"])
+        self.entry.grid(row=2, column=0, sticky="ew", padx=(24, 8), pady=(16, 6), ipady=6)
+        browse = FlatButton(self, "Browse…", self._browse, fonts["ui"], base="panel")
+        browse.set_palette(p)
+        browse.grid(row=2, column=1, padx=(0, 24), pady=(16, 6))
 
-        self.error = tk.Label(self, text="", bg=p["panel"], fg=p["edit"], font=(ui_font, 10), anchor="w")
-        self.error.grid(row=3, column=0, columnspan=2, sticky="ew", padx=20)
+        self.error = tk.Label(self, text=" ", bg=p["panel"], fg=p["edit"], font=fonts["small"], anchor="w")
+        self.error.grid(row=3, column=0, columnspan=2, sticky="ew", padx=24)
 
-        bar = tk.Frame(self, bg=p["bg"])
-        bar.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(14, 0))
-        tk.Button(bar, text="Quit", command=self._cancel, relief="flat", bg=p["panel"], fg=p["fg"],
-                  highlightthickness=1, highlightbackground=p["line"], padx=14, pady=4,
-                  font=(ui_font, 10)).pack(side="right", padx=(8, 16), pady=12)
-        tk.Button(bar, text="Open", command=self._ok, relief="flat", bg=p["accent"], fg=p["accent_ink"],
-                  activebackground=p["accent"], activeforeground=p["accent_ink"], padx=18, pady=4,
-                  font=(ui_font, 10, "bold")).pack(side="right", pady=12)
+        bar = tk.Frame(self, bg=p["panel"])
+        bar.grid(row=4, column=0, columnspan=2, sticky="e", padx=18, pady=(8, 18))
+        quit_btn = FlatButton(bar, "Quit", self._cancel, fonts["ui"], base="panel")
+        quit_btn.set_palette(p)
+        quit_btn.pack(side="left", padx=(0, 6))
+        open_btn = FlatButton(bar, "Open", self._ok, fonts["ui_bold"], kind="primary", padx=22)
+        open_btn.set_palette(p)
+        open_btn.pack(side="left")
 
         self.bind("<Return>", lambda _e: self._ok())
         self.bind("<Escape>", lambda _e: self._cancel())
@@ -543,7 +623,11 @@ class StartDialog(tk.Toplevel if tk else object):  # type: ignore[misc]
         self.geometry(f"+{x}+{y}")
         self.entry.focus_set()
         self.entry.select_range(0, "end")
-        self.grab_set()
+        try:
+            self.wait_visibility()
+            self.grab_set()
+        except tk.TclError:
+            pass
 
     def _browse(self) -> None:
         start = self.var.get() if os.path.isdir(self.var.get()) else os.path.expanduser("~")
@@ -569,7 +653,6 @@ class StartDialog(tk.Toplevel if tk else object):  # type: ignore[misc]
 class Tab:
     def __init__(self, doc: ScriptDocument, entry: ScriptEntry, editor: CodeEditor):
         self.doc, self.entry, self.editor = doc, entry, editor
-        self.frame = self.dot = self.title = self.close = self.bar = None
 
 
 class App(tk.Tk if tk else object):  # type: ignore[misc]
@@ -582,23 +665,34 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
         self.library: Optional[ScriptLibrary] = None
         self.tabs: list[Tab] = []
         self.current: Optional[Tab] = None
-        self._rows: dict[str, ScriptEntry] = {}
+        self._visible: list[ScriptEntry] = []
+        self._sel_path: Optional[str] = None
         self._search_job = None
         self._toast_job = None
         self._load_queue: queue.Queue = queue.Queue()
-        self._suppress_select = False
+        self._skin: list[tuple] = []
+        self._buttons: list[FlatButton] = []
+        self._placeholder_on = False
 
         self.title(APP_NAME)
-        self.geometry("1240x780")
-        self.minsize(860, 520)
+        self.geometry("1280x800")
+        self.minsize(900, 540)
         try:
             self._icon = tk.PhotoImage(data=base64.b64decode("".join(ICON_PNG_B64.split())))
             self.iconphoto(True, self._icon)
         except tk.TclError:
             pass
 
-        self.ui_font = _first_font(("Segoe UI", "SF Pro Text", "Noto Sans", "DejaVu Sans"), "TkDefaultFont")
+        ui = _first_font(("Segoe UI", "SF Pro Text", "Noto Sans", "DejaVu Sans"), "TkDefaultFont")
         mono = _first_font(("Cascadia Mono", "Consolas", "Menlo", "DejaVu Sans Mono", "Liberation Mono"), "TkFixedFont")
+        self.fonts = {
+            "ui": tkfont.Font(family=ui, size=10),
+            "ui_bold": tkfont.Font(family=ui, size=10, weight="bold"),
+            "small": tkfont.Font(family=ui, size=9),
+            "title": tkfont.Font(family=ui, size=12, weight="bold"),
+            "row": tkfont.Font(family=ui, size=10),
+            "row_bold": tkfont.Font(family=ui, size=10, weight="bold"),
+        }
         self.mono = tkfont.Font(family=mono, size=11)
 
         self._build()
@@ -610,182 +704,164 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
         self.after(60, self.startup)
 
     # ------------------------------------------------------------------ UI
+    def _s(self, widget, **opts):
+        """Register widget options that map to palette keys (re-applied on theme change)."""
+        self._skin.append((widget, opts))
+        return widget
+
+    def _btn(self, parent, text, command, **kw) -> FlatButton:
+        b = FlatButton(parent, text, command, kw.pop("font", self.fonts["ui"]), **kw)
+        self._buttons.append(b)
+        return b
+
+    def _hairline(self, parent, row=None, column=0, columnspan=1, vertical=False):
+        f = tk.Frame(parent, width=1 if vertical else 0, height=0 if vertical else 1)
+        self._s(f, bg="line")
+        return f
+
     def _build(self) -> None:
-        f = lambda size=10, weight="normal": (self.ui_font, size, weight)  # noqa: E731
-        self.configure(bg="#000000")
-        self.grid_rowconfigure(1, weight=1)
+        F = self.fonts
+        self.grid_rowconfigure(2, weight=1)
         self.grid_columnconfigure(0, weight=1)
+        self._s(self, bg="bg")
 
-        # app bar
-        self.appbar = tk.Frame(self, height=40)
-        self.appbar.grid(row=0, column=0, sticky="ew")
-        self.appbar.grid_propagate(False)
-        self.appbar.grid_columnconfigure(2, weight=1)
-        self.logo = tk.Canvas(self.appbar, width=22, height=16, highlightthickness=0, bd=0)
-        self.logo.grid(row=0, column=0, padx=(14, 8), pady=12)
+        # top bar
+        top = self._s(tk.Frame(self, height=46), bg="bg")
+        top.grid(row=0, column=0, sticky="ew")
+        top.grid_propagate(False)
+        top.grid_columnconfigure(2, weight=1)
+        self.logo = tk.Canvas(top, width=22, height=16, highlightthickness=0, bd=0)
+        self._s(self.logo, bg="bg")
         self.logo.create_polygon(0, 0, 22, 0, 13.5, 15, 0, 15, tags="logo")
-        self.app_title = tk.Label(self.appbar, text=APP_NAME, font=f(11, "bold"))
-        self.app_title.grid(row=0, column=1)
-        self.folder_label = tk.Label(self.appbar, text="", font=f(9), anchor="e")
-        self.folder_label.grid(row=0, column=2, sticky="e", padx=10)
-        self.theme_btn = tk.Button(self.appbar, command=self.toggle_theme, relief="flat", bd=0, padx=10, pady=3, font=f(9))
-        self.theme_btn.grid(row=0, column=3, padx=3)
-        self.folder_btn = tk.Button(self.appbar, text="Change folder", command=self.change_folder, relief="flat", bd=0,
-                                    padx=10, pady=3, font=f(9))
-        self.folder_btn.grid(row=0, column=4, padx=(3, 10))
+        self.logo.grid(row=0, column=0, padx=(18, 8))
+        self._s(tk.Label(top, text=APP_NAME, font=F["ui_bold"]), bg="bg", fg="fg").grid(row=0, column=1)
+        self.folder_label = self._s(tk.Label(top, text="", font=F["small"], anchor="e"), bg="bg", fg="dim")
+        self.folder_label.grid(row=0, column=2, sticky="e", padx=12)
+        self.theme_btn = self._btn(top, "Dark", self.toggle_theme, base="bg", padx=10, pady=4)
+        self.theme_btn.grid(row=0, column=3)
+        self._btn(top, "Change folder", self.change_folder, base="bg", padx=10, pady=4).grid(row=0, column=4, padx=(0, 12))
+        self._hairline(self).grid(row=1, column=0, sticky="ew")
 
-        # body
-        self.body = tk.Frame(self)
-        self.body.grid(row=1, column=0, sticky="nsew")
-        self.body.grid_rowconfigure(0, weight=1)
-        self.body.grid_columnconfigure(1, weight=1)
+        # body: resizable list | editor
+        self.paned = self._s(tk.PanedWindow(self, orient="horizontal", sashwidth=7, sashrelief="flat", bd=0,
+                                            sashcursor="sb_h_double_arrow", opaqueresize=True), bg="panel")
+        self.paned.grid(row=2, column=0, sticky="nsew")
 
-        self.side = tk.Frame(self.body, width=320)
-        self.side.grid(row=0, column=0, sticky="ns")
-        self.side.grid_propagate(False)
-        self.side.grid_rowconfigure(4, weight=1)
-        self.side.grid_columnconfigure(0, weight=1)
+        left = self._s(tk.Frame(self.paned), bg="panel")
+        left.grid_rowconfigure(3, weight=1)
+        left.grid_columnconfigure(0, weight=1)
         self.search_var = tk.StringVar()
-        self.search_var.trace_add("write", lambda *_: self._schedule_search())
-        self.search_caption = tk.Label(self.side, text="Search scripts by name or content", font=f(9), anchor="w")
-        self.search_caption.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 0))
-        self.search = tk.Entry(self.side, textvariable=self.search_var, relief="flat", font=f(10))
-        self.search.grid(row=1, column=0, sticky="ew", padx=12, pady=(4, 6), ipady=6)
-        self.name_only = tk.BooleanVar(value=self.settings.name_only)
-        self.name_only.trace_add("write", lambda *_: self._on_name_only())
-        self.name_only_cb = tk.Checkbutton(self.side, text="Match file names only", variable=self.name_only,
-                                           relief="flat", bd=0, font=f(9), anchor="w", highlightthickness=0)
-        self.name_only_cb.grid(row=2, column=0, sticky="w", padx=10)
-        self.count_label = tk.Label(self.side, text="", font=f(9), anchor="w")
-        self.count_label.grid(row=3, column=0, sticky="ew", padx=12, pady=(6, 6))
+        self.search_var.trace_add("write", lambda *_: self._on_search_typed())
+        self.search = self._s(tk.Entry(left, textvariable=self.search_var, relief="flat", font=F["ui"],
+                                       highlightthickness=1), bg="bg", insertbackground="fg",
+                              highlightbackground="line", highlightcolor="accent")
+        self.search.grid(row=0, column=0, sticky="ew", padx=(18, 12), pady=(16, 8), ipady=7)
+        self.search.bind("<FocusIn>", self._ph_hide)
+        self.search.bind("<FocusOut>", self._ph_show)
+        self.search.bind("<Down>", lambda _e: (self.list.focus_set(), self._move_selection(1), "break")[2])
+        self.count_label = self._s(tk.Label(left, text="", font=F["small"], anchor="w"), bg="panel", fg="dim")
+        self.count_label.grid(row=1, column=0, sticky="ew", padx=(20, 12), pady=(0, 6))
+        self._hairline(left).grid(row=2, column=0, columnspan=2, sticky="ew")
 
-        self.listwrap = tk.Frame(self.side)
-        self.listwrap.grid(row=4, column=0, sticky="nsew")
-        self.listwrap.grid_rowconfigure(0, weight=1)
-        self.listwrap.grid_columnconfigure(0, weight=1)
-        self.tree = ttk.Treeview(self.listwrap, columns=("name", "ver"), show="", selectmode="browse",
-                                 style="Scripts.Treeview")
-        self.tree.column("name", stretch=True, width=210)
-        self.tree.column("ver", stretch=False, width=80, anchor="e")
-        self.tree_sb = ttk.Scrollbar(self.listwrap, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=self.tree_sb.set)
-        self.tree.grid(row=0, column=0, sticky="nsew")
-        self.tree_sb.grid(row=0, column=1, sticky="ns")
-        self.tree.bind("<<TreeviewSelect>>", self._on_select)
-        self.empty_label = tk.Label(self.listwrap, text="", font=f(10), wraplength=270, justify="left")
+        wrap = self._s(tk.Frame(left), bg="panel")
+        wrap.grid(row=3, column=0, columnspan=2, sticky="nsew")
+        wrap.grid_rowconfigure(0, weight=1)
+        wrap.grid_columnconfigure(0, weight=1)
+        self.list = self._s(tk.Text(wrap, wrap="none", bd=0, highlightthickness=0, relief="flat", cursor="arrow",
+                                    font=F["row"], spacing1=6, spacing3=6, padx=14, pady=4, insertwidth=0,
+                                    state="disabled", takefocus=True), bg="panel", fg="fg",
+                            selectbackground="panel", inactiveselectbackground="panel")
+        self.list_vsb = ttk.Scrollbar(wrap, orient="vertical", command=self.list.yview, style="Thin.Vertical.TScrollbar")
+        self.list_hsb = ttk.Scrollbar(wrap, orient="horizontal", command=self.list.xview, style="Thin.Horizontal.TScrollbar")
+        self.list.configure(yscrollcommand=lambda f, l: _auto_scrollbar(self.list_vsb, f, l),
+                            xscrollcommand=lambda f, l: _auto_scrollbar(self.list_hsb, f, l))
+        self.list.grid(row=0, column=0, sticky="nsew")
+        self.list_vsb.grid(row=0, column=1, sticky="ns")
+        self.list_hsb.grid(row=1, column=0, sticky="ew")
+        self.empty_label = self._s(tk.Label(wrap, text="", font=F["ui"], wraplength=300, justify="left"), bg="panel", fg="dim")
+        self.list.bind("<Button-1>", self._on_list_click)
+        self.list.bind("<B1-Motion>", lambda _e: "break")
+        self.list.bind("<Double-Button-1>", lambda _e: "break")
+        self.list.bind("<Up>", lambda _e: (self._move_selection(-1), "break")[1])
+        self.list.bind("<Down>", lambda _e: (self._move_selection(1), "break")[1])
+        self.list.bind("<Return>", lambda _e: (self._open_selected(), "break")[1])
 
-        # editor area
-        self.right = tk.Frame(self.body)
-        self.right.grid(row=0, column=1, sticky="nsew")
-        self.right.grid_rowconfigure(2, weight=1)
-        self.right.grid_columnconfigure(0, weight=1)
-        self.tabstrip = tk.Frame(self.right)
+        right = self._s(tk.Frame(self.paned), bg="panel")
+        right.grid_rowconfigure(3, weight=1)
+        right.grid_columnconfigure(0, weight=1)
+        self.paned.add(left, minsize=260, width=470, stretch="never")
+        self.paned.add(right, minsize=460, stretch="always")
+
+        self.tabstrip = self._s(tk.Frame(right), bg="panel")
         self.tabstrip.grid(row=0, column=0, sticky="ew")
-
-        self.actions = tk.Frame(self.right)
+        self.actions = self._s(tk.Frame(right), bg="panel")
         self.actions.grid(row=1, column=0, sticky="ew")
-        self.jump_btn = tk.Button(self.actions, text="Go to modification section", command=self.jump, relief="flat",
-                                  bd=0, padx=12, pady=5, font=f(10, "bold"))
-        self.reset_btn = tk.Button(self.actions, text="Reset to original", command=self.reset, relief="flat", padx=12,
-                                   pady=4, font=f(10))
-        self.copy_btn = tk.Button(self.actions, text="Copy script", command=self.copy, relief="flat", padx=12, pady=4,
-                                  font=f(10))
-        self.jump_btn.pack(side="left", padx=(12, 10), pady=8)
-        self.reset_btn.pack(side="left", padx=(0, 6), pady=8)
-        self.copy_btn.pack(side="left", pady=8)
-        self.section_label = tk.Label(self.actions, text="", font=f(9))
-        self.section_label.pack(side="right", padx=14)
-        self.section_swatch = tk.Frame(self.actions, width=11, height=11, highlightthickness=1)
-        self.section_swatch.pack(side="right")
+        self.jump_btn = self._btn(self.actions, "Go to modification section", self.jump, kind="primary",
+                                  font=F["ui_bold"], padx=16, pady=7)
+        self.reset_btn = self._btn(self.actions, "Reset to original", self.reset)
+        self.copy_btn = self._btn(self.actions, "Copy script", self.copy)
+        self.jump_btn.pack(side="left", padx=(18, 8), pady=12)
+        self.reset_btn.pack(side="left", padx=2, pady=12)
+        self.copy_btn.pack(side="left", padx=2, pady=12)
+        self.section_label = self._s(tk.Label(self.actions, text="", font=F["small"]), bg="panel", fg="dim")
+        self.section_label.pack(side="right", padx=18)
+        self._hairline(right).grid(row=2, column=0, sticky="ew")
 
-        self.editor_host = tk.Frame(self.right)
-        self.editor_host.grid(row=2, column=0, sticky="nsew")
+        self.editor_host = self._s(tk.Frame(right), bg="panel")
+        self.editor_host.grid(row=3, column=0, sticky="nsew")
         self.editor_host.grid_rowconfigure(0, weight=1)
         self.editor_host.grid_columnconfigure(0, weight=1)
-        self.empty_state = tk.Frame(self.editor_host)
+        self.empty_state = self._s(tk.Frame(self.editor_host), bg="panel")
         self.empty_state.grid(row=0, column=0, sticky="nsew")
-        self.empty_title = tk.Label(self.empty_state, text="Open a script to start", font=f(14, "bold"))
-        self.empty_text = tk.Label(self.empty_state, text="Pick a script from the list on the left. You can keep several "
-                                   "scripts open in tabs.", font=f(10), wraplength=340, justify="center")
-        self.empty_title.place(relx=0.5, rely=0.42, anchor="center")
-        self.empty_text.place(relx=0.5, rely=0.48, anchor="n")
-        self.toast = tk.Label(self.editor_host, text="", font=f(10), padx=14, pady=8)
+        self._s(tk.Label(self.empty_state, text="Open a script to start", font=F["title"]),
+                bg="panel", fg="fg").place(relx=0.5, rely=0.42, anchor="center")
+        self._s(tk.Label(self.empty_state, text="Pick a script from the list. You can keep several open in tabs.",
+                         font=F["ui"]), bg="panel", fg="dim").place(relx=0.5, rely=0.47, anchor="n")
+        self.toast = self._s(tk.Label(self.editor_host, text="", font=F["ui"], padx=16, pady=9), bg="fg", fg="panel")
 
         # status bar
-        self.status = tk.Frame(self)
-        self.status.grid(row=2, column=0, sticky="ew")
-        self.pos_label = tk.Label(self.status, text="Ln 1, Col 1", font=f(9))
-        self.state_label = tk.Label(self.status, text="No changes", font=f(9))
-        tk.Label(self.status, text="UTF-8", font=f(9)).pack(side="left", padx=(14, 18), pady=4)
-        tk.Label(self.status, text="SQL", font=f(9)).pack(side="left", pady=4)
-        self.pos_label.pack(side="left", padx=18, pady=4)
-        self.state_label.pack(side="right", padx=14, pady=4)
-        self._status_children = list(self.status.winfo_children())
+        self._hairline(self).grid(row=3, column=0, sticky="ew")
+        status = self._s(tk.Frame(self), bg="bg")
+        status.grid(row=4, column=0, sticky="ew")
+        for text in ("UTF-8", "SQL"):
+            self._s(tk.Label(status, text=text, font=F["small"]), bg="bg", fg="dim").pack(side="left", padx=(18, 0), pady=6)
+        self.pos_label = self._s(tk.Label(status, text="Ln 1, Col 1", font=F["small"]), bg="bg", fg="dim")
+        self.pos_label.pack(side="left", padx=18, pady=6)
+        self.state_label = self._s(tk.Label(status, text="No changes", font=F["small"]), bg="bg", fg="dim")
+        self.state_label.pack(side="right", padx=18, pady=6)
 
         self._set_actions_enabled(False)
 
     # --------------------------------------------------------------- theme
     def apply_theme(self) -> None:
         p = self.p
-        self.configure(bg=p["bg"])
-        for w in (self.appbar,):
-            w.configure(bg=p["shell"])
-        self.logo.configure(bg=p["shell"])
+        for widget, opts in self._skin:
+            widget.configure(**{k: p[v] for k, v in opts.items()})
+        for b in self._buttons:
+            b.set_palette(p)
         self.logo.itemconfigure("logo", fill=p["accent"], outline=p["accent"])
-        self.app_title.configure(bg=p["shell"], fg=p["shell_fg"])
-        self.folder_label.configure(bg=p["shell"], fg=p["shell_dim"])
-        for b in (self.theme_btn, self.folder_btn):
-            b.configure(bg=p["shell2"], fg=p["shell_fg"], activebackground="#34506B", activeforeground=p["shell_fg"])
-        self.theme_btn.configure(text="Dark theme" if self.settings.theme == "light" else "Light theme")
-
-        self.body.configure(bg=p["bg"])
-        self.side.configure(bg=p["panel2"])
-        self.listwrap.configure(bg=p["panel2"])
-        self.search.configure(bg=p["panel"], fg=p["fg"], insertbackground=p["fg"], highlightthickness=1,
-                              highlightbackground=p["line"], highlightcolor=p["accent"])
-        self.name_only_cb.configure(bg=p["panel2"], fg=p["fg"], activebackground=p["panel2"], activeforeground=p["fg"],
-                                    selectcolor=p["panel"])
-        self.count_label.configure(bg=p["panel2"], fg=p["dim"])
-        self.search_caption.configure(bg=p["panel2"], fg=p["dim"])
-        self.empty_label.configure(bg=p["panel2"], fg=p["dim"])
-
-        self.right.configure(bg=p["panel"])
-        self.tabstrip.configure(bg=p["bg"])
-        self.actions.configure(bg=p["panel"], highlightthickness=0)
-        self.jump_btn.configure(bg=p["accent"], fg=p["accent_ink"], activebackground=p["accent"],
-                                activeforeground=p["accent_ink"], disabledforeground=p["accent_ink"])
-        for b in (self.reset_btn, self.copy_btn):
-            b.configure(bg=p["panel"], fg=p["fg"], activebackground=p["bg"], activeforeground=p["fg"],
-                        highlightthickness=1, highlightbackground=p["line"], disabledforeground=p["dim"])
-        self.section_label.configure(bg=p["panel"], fg=p["dim"])
-        self.section_swatch.configure(bg=p["edit_bg"], highlightbackground=p["edit"])
-        self.editor_host.configure(bg=p["panel"])
-        self.empty_state.configure(bg=p["panel"])
-        self.empty_title.configure(bg=p["panel"], fg=p["fg"])
-        self.empty_text.configure(bg=p["panel"], fg=p["dim"])
-        self.toast.configure(bg=p["shell"], fg=p["shell_fg"])
-        self.status.configure(bg=p["shell2"])
-        for w in self._status_children:
-            w.configure(bg=p["shell2"], fg=p["shell_dim"])
-        self._update_state_label()
+        self.theme_btn.configure(text="Dark" if self.settings.theme == "light" else "Light")
+        self.list.tag_configure("cur", background=p["sel"])
+        self.list.tag_configure("match", font=self.fonts["row_bold"], foreground=p["accent"])
+        self.list.tag_configure("ext", foreground=p["faint"])
+        self.list.tag_configure("folder", foreground=p["dim"], font=self.fonts["small"])
+        self.list.tag_configure("dot", foreground=p["edit"])
 
         st = ttk.Style(self)
         st.theme_use("clam")
-        st.configure("Scripts.Treeview", background=p["panel2"], fieldbackground=p["panel2"], foreground=p["fg"],
-                     borderwidth=0, rowheight=26, font=(self.ui_font, 10))
-        st.map("Scripts.Treeview", background=[("selected", p["panel"])], foreground=[("selected", p["accent"])])
-        st.layout("Scripts.Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
-        st.configure("Vertical.TScrollbar", background=p["line"], troughcolor=p["panel2"], bordercolor=p["panel2"],
-                     arrowcolor=p["dim"], lightcolor=p["line"], darkcolor=p["line"])
-        st.configure("Horizontal.TScrollbar", background=p["line"], troughcolor=p["panel2"], bordercolor=p["panel2"],
-                     arrowcolor=p["dim"], lightcolor=p["line"], darkcolor=p["line"])
-        for name in ("Vertical.TScrollbar", "Horizontal.TScrollbar"):
-            st.map(name, background=[("disabled", p["line"]), ("active", p["dim"]), ("!active", p["line"])])
+        for orient, side in (("Vertical", "ns"), ("Horizontal", "ew")):
+            name = f"Thin.{orient}.TScrollbar"
+            st.layout(name, [(f"{orient}.Scrollbar.trough", {"sticky": side, "children": [
+                (f"{orient}.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})]})])
+            st.configure(name, width=9, background=p["line"], troughcolor=p["panel"], bordercolor=p["panel"],
+                         lightcolor=p["line"], darkcolor=p["line"], relief="flat", gripcount=0)
+            st.map(name, background=[("active", p["faint"]), ("!active", p["line"])])
         for t in self.tabs:
             t.editor.set_palette(p)
-        self._style_jump_button()
+        self._ph_refresh()
+        self._render_list()
         self._render_tabs()
-        self._refresh_list_marks()
+        self._update_state_label()
 
     def toggle_theme(self) -> None:
         self.settings.theme = "dark" if self.settings.theme == "light" else "light"
@@ -800,7 +876,7 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
     def change_folder(self, initial: bool = False) -> None:
         if not self._close_all_tabs():
             return
-        dlg = StartDialog(self, self.p, self.ui_font, self.settings.last_folder)
+        dlg = StartDialog(self, self.p, self.fonts, self.settings.last_folder)
         self.wait_window(dlg)
         if dlg.result:
             self.load_folder(dlg.result)
@@ -812,23 +888,24 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
         self.settings.save()
         self.folder_label.configure(text=path)
         self.count_label.configure(text="Loading scripts…")
-        self._clear_list()
         self.library = None
+        self._visible = []
+        self._render_list()
 
         def work() -> None:
             try:
-                self._load_queue.put((path, ScriptLibrary.load(path), None))
+                self._load_queue.put((ScriptLibrary.load(path), None))
             except Exception as ex:  # noqa: BLE001 - reported to the user
-                self._load_queue.put((path, None, ex))
+                self._load_queue.put((None, ex))
 
         threading.Thread(target=work, daemon=True).start()
-        self.after(40, self._poll_load)
+        self.after(30, self._poll_load)
 
     def _poll_load(self) -> None:
         try:
-            path, lib, err = self._load_queue.get_nowait()
+            lib, err = self._load_queue.get_nowait()
         except queue.Empty:
-            self.after(40, self._poll_load)
+            self.after(30, self._poll_load)
             return
         if err is not None:
             self.count_label.configure(text=f"Cannot read this folder: {err}")
@@ -837,68 +914,112 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
         self._apply_filter()
 
     # -------------------------------------------------------------- search
+    PLACEHOLDER = "Search scripts by file name"
+
+    def _query(self) -> str:
+        return "" if self._placeholder_on else self.search_var.get()
+
+    def _ph_refresh(self) -> None:
+        self.search.configure(fg=self.p["faint"] if self._placeholder_on else self.p["fg"])
+
+    def _ph_show(self, _e=None) -> None:
+        if not self.search_var.get():
+            self._placeholder_on = True
+            self.search_var.set(self.PLACEHOLDER)
+            self.search.configure(fg=self.p["faint"])
+
+    def _ph_hide(self, _e=None) -> None:
+        if self._placeholder_on:
+            self._placeholder_on = False
+            self.search_var.set("")
+            self.search.configure(fg=self.p["fg"])
+
     def _focus_search(self, _e=None):
         self.search.focus_set()
         self.search.select_range(0, "end")
         return "break"
 
-    def _schedule_search(self) -> None:
+    def _on_search_typed(self) -> None:
+        if self._placeholder_on:
+            return
         if self._search_job:
             self.after_cancel(self._search_job)
         self._search_job = self.after(150, self._apply_filter)
-
-    def _on_name_only(self) -> None:
-        self.settings.name_only = bool(self.name_only.get())
-        self.settings.save()
-        self._apply_filter()
-
-    def _clear_list(self) -> None:
-        self.tree.delete(*self.tree.get_children())
-        self._rows.clear()
-
-    def _row_text(self, e: ScriptEntry) -> str:
-        mod = any(t.entry is e and t.doc.is_modified for t in self.tabs)
-        name = e.base_name + (f"   {e.folder}" if e.folder else "")
-        return ("● " if mod else "") + name
 
     def _apply_filter(self) -> None:
         self._search_job = None
         if self.library is None:
             return
-        hits = self.library.search(self.search_var.get(), bool(self.name_only.get()))
-        self._clear_list()
-        for e in hits:
-            self.tree.insert("", "end", iid=e.path, values=(self._row_text(e), e.version))
-            self._rows[e.path] = e
+        self._visible = self.library.search(self._query())
         total = len(self.library.entries)
-        self.count_label.configure(text=f"{len(hits):,} of {total:,} scripts")
-        if hits:
+        self.count_label.configure(
+            text=f"{total:,} scripts" if not self._query().strip() else f"{len(self._visible):,} of {total:,} scripts")
+        self._render_list()
+
+    # ------------------------------------------------------- list rendering
+    def _render_list(self) -> None:
+        t, query = self.list, self._query()
+        mods = {tab.entry.path for tab in self.tabs if tab.doc.is_modified}
+        lines, tags = [], []
+        for n, e in enumerate(self._visible, start=1):
+            name = e.file_name
+            row = name
+            tags.append(("ext", n, len(os.path.splitext(name)[0]), len(name)))
+            for s, en in match_spans(name, query):
+                tags.append(("match", n, s, en))
+            if e.folder:
+                tags.append(("folder", n, len(row) + 3, len(row) + 3 + len(e.folder)))
+                row += "   " + e.folder
+            if e.path in mods:
+                tags.append(("dot", n, len(row) + 2, len(row) + 3))
+                row += "  ●"
+            lines.append(row)
+        t.configure(state="normal")
+        t.delete("1.0", "end")
+        t.insert("1.0", "\n".join(lines))
+        for tag, n, c0, c1 in tags:
+            t.tag_add(tag, f"{n}.{c0}", f"{n}.{c1}")
+        t.configure(state="disabled")
+        self._mark_current()
+        if self._visible:
             self.empty_label.place_forget()
-        else:
-            self.empty_label.configure(text="No .txt or .sql files found in this folder. Use Change folder to pick "
-                                       "another one." if total == 0 else "No scripts match your search.")
-            self.empty_label.place(x=12, y=14)
-        if self.current and self.current.entry.path in self._rows:
-            self._select_row(self.current.entry.path)
+        elif self.library is not None:
+            self.empty_label.configure(
+                text="No .txt or .sql files found in this folder. Use Change folder to pick another one."
+                if not self.library.entries else "No scripts match your search.")
+            self.empty_label.place(x=16, y=16)
 
-    def _select_row(self, path: str) -> None:
-        self._suppress_select = True
-        try:
-            self.tree.selection_set(path)
-            self.tree.see(path)
-        finally:
-            self.after_idle(lambda: setattr(self, "_suppress_select", False))
+    def _mark_current(self) -> None:
+        t = self.list
+        t.tag_remove("cur", "1.0", "end")
+        for n, e in enumerate(self._visible, start=1):
+            if e.path == self._sel_path:
+                t.tag_add("cur", f"{n}.0", f"{n + 1}.0")
+                t.see(f"{n}.0")
+                break
 
-    def _refresh_list_marks(self) -> None:
-        for path, e in self._rows.items():
-            self.tree.set(path, "name", self._row_text(e))
+    def _on_list_click(self, event):
+        self.list.focus_set()
+        n = int(self.list.index(f"@{event.x},{event.y}").split(".")[0])
+        if 1 <= n <= len(self._visible):
+            self._sel_path = self._visible[n - 1].path
+            self._mark_current()
+            self.open_script(self._visible[n - 1])
+        return "break"
 
-    def _on_select(self, _e=None) -> None:
-        if self._suppress_select:
+    def _move_selection(self, delta: int) -> None:
+        if not self._visible:
             return
-        sel = self.tree.selection()
-        if sel and sel[0] in self._rows:
-            self.open_script(self._rows[sel[0]])
+        paths = [e.path for e in self._visible]
+        i = paths.index(self._sel_path) if self._sel_path in paths else (-1 if delta > 0 else len(paths))
+        self._sel_path = paths[max(0, min(len(paths) - 1, i + delta))]
+        self._mark_current()
+
+    def _open_selected(self) -> None:
+        for e in self._visible:
+            if e.path == self._sel_path:
+                self.open_script(e)
+                return
 
     # ---------------------------------------------------------------- tabs
     def open_script(self, entry: ScriptEntry) -> None:
@@ -926,7 +1047,8 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
         else:
             tab.editor.grid(row=0, column=0, sticky="nsew")
             tab.editor.text.focus_set()
-            self._select_row(tab.entry.path) if tab.entry.path in self._rows else self.tree.selection_set(())
+            self._sel_path = tab.entry.path
+            self._mark_current()
         self._set_actions_enabled(tab is not None)
         self._render_tabs()
         self._update_section_info()
@@ -935,40 +1057,33 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
             self._on_cursor(tab.editor)
 
     def _render_tabs(self) -> None:
-        p = self.p
+        p, F = self.p, self.fonts
         for w in self.tabstrip.winfo_children():
             w.destroy()
-        self.tabstrip.configure(bg=p["bg"])
-        tk.Frame(self.tabstrip, height=6, bg=p["bg"]).pack(side="top", fill="x")
-        row = tk.Frame(self.tabstrip, bg=p["bg"])
-        row.pack(side="top", fill="x", padx=(8, 0))
+        row = tk.Frame(self.tabstrip, bg=p["panel"])
+        row.pack(side="top", fill="x", padx=(10, 0), pady=(6, 0))
         for t in self.tabs:
             sel = t is self.current
-            bg = p["panel"] if sel else p["bg"]
-            fg = p["fg"] if sel else p["dim"]
-            box = tk.Frame(row, bg=bg)
-            box.pack(side="left", padx=(0, 2))
-            tk.Frame(box, height=2, bg=p["accent"] if sel else bg).pack(side="top", fill="x")
-            inner = tk.Frame(box, bg=bg)
+            box = tk.Frame(row, bg=p["panel"])
+            box.pack(side="left", padx=(0, 4))
+            inner = tk.Frame(box, bg=p["panel"])
             inner.pack(side="top")
-            title = tk.Label(inner, text=self._tab_title(t), bg=bg, fg=fg, font=(self.ui_font, 10), padx=10, pady=5)
+            title = tk.Label(inner, text=os.path.splitext(t.doc.name)[0], bg=p["panel"], fg=p["fg"] if sel else p["dim"],
+                             font=F["ui_bold"] if sel else F["ui"], padx=8, pady=7)
             title.pack(side="left")
-            dot = tk.Label(inner, text="●" if t.doc.is_modified else " ", bg=bg, fg=p["edit"], font=(self.ui_font, 8))
+            dot = tk.Label(inner, text="●" if t.doc.is_modified else " ", bg=p["panel"], fg=p["edit"], font=F["small"])
             dot.pack(side="left")
-            close = tk.Label(inner, text="✕", bg=bg, fg=p["dim"], font=(self.ui_font, 8), padx=6, cursor="hand2")
+            close = tk.Label(inner, text="✕", bg=p["panel"], fg=p["dim"] if sel else p["faint"], font=F["small"],
+                             padx=6, cursor="hand2")
             close.pack(side="left", padx=(0, 4))
             close.bind("<Enter>", lambda _e, c=close: c.configure(fg=p["fg"]))
-            close.bind("<Leave>", lambda _e, c=close: c.configure(fg=p["dim"]))
+            close.bind("<Leave>", lambda _e, c=close, s=sel: c.configure(fg=p["dim"] if s else p["faint"]))
             close.bind("<Button-1>", lambda _e, tab=t: self.close_tab(tab))
+            tk.Frame(box, height=2, bg=p["accent"] if sel else p["panel"]).pack(side="top", fill="x")
             for w in (box, inner, title, dot):
                 w.bind("<Button-1>", lambda _e, tab=t: self.select_tab(tab))
                 w.bind("<Button-2>", lambda _e, tab=t: self.close_tab(tab))
                 w.bind("<Button-3>", lambda e, tab=t: self._tab_menu(e, tab))
-            t.title, t.dot, t.close, t.frame = title, dot, close, box
-        tk.Frame(self.tabstrip, height=1, bg=p["line"]).pack(side="bottom", fill="x")
-
-    def _tab_title(self, t: Tab) -> str:
-        return os.path.splitext(t.doc.name)[0].replace("_2.00.040+", "")
 
     def _tab_menu(self, event, tab: Tab) -> None:
         m = tk.Menu(self, tearoff=0)
@@ -994,7 +1109,7 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
             self.select_tab(self.tabs[min(i, len(self.tabs) - 1)] if self.tabs else None)
         else:
             self._render_tabs()
-        self._refresh_list_marks()
+        self._render_list()
         return True
 
     def _close_all_tabs(self) -> bool:
@@ -1005,17 +1120,8 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
 
     # ------------------------------------------------------------- actions
     def _set_actions_enabled(self, on: bool) -> None:
-        state = "normal" if on else "disabled"
         for b in (self.jump_btn, self.reset_btn, self.copy_btn):
-            b.configure(state=state)
-        self._style_jump_button()
-
-    def _style_jump_button(self) -> None:
-        p = self.p
-        if str(self.jump_btn.cget("state")) == "disabled":
-            self.jump_btn.configure(bg=p["line"], fg=p["dim"], disabledforeground=p["dim"])
-        else:
-            self.jump_btn.configure(bg=p["accent"], fg=p["accent_ink"])
+            b.set_enabled(on)
 
     def jump(self) -> None:
         if self.current and self.current.editor.jump():
@@ -1043,7 +1149,7 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
             self.show_toast(f"Cannot save: {ex.strerror or ex}")
             return False
         self._render_tabs()
-        self._refresh_list_marks()
+        self._render_list()
         self._update_state_label()
         return True
 
@@ -1058,7 +1164,7 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
             self._update_section_info()
             self._update_state_label()
         self._render_tabs()
-        self._refresh_list_marks()
+        self._render_list()
 
     def _on_cursor(self, editor: CodeEditor) -> None:
         if self.current and self.current.editor is editor:
@@ -1068,23 +1174,21 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
     def _update_section_info(self) -> None:
         if not self.current:
             self.section_label.configure(text="")
-            self.jump_btn.configure(state="disabled")
-            self._style_jump_button()
+            self.jump_btn.set_enabled(False)
             return
         s = self.current.editor.section
         self.section_label.configure(
-            text=f"Modification section: lines {s[0] + 1}–{s[1] + 1}" if s else "No modification section in this script")
-        self.jump_btn.configure(state="normal" if s else "disabled")
-        self._style_jump_button()
+            text=f"Section: lines {s[0] + 1}–{s[1] + 1}" if s else "No modification section")
+        self.jump_btn.set_enabled(bool(s))
 
     def _update_state_label(self) -> None:
         mod = bool(self.current and self.current.doc.is_modified)
-        self.state_label.configure(text="Modified (not saved)" if mod else "No changes",
-                                   fg="#FFB070" if mod else self.p["shell_dim"])
+        self.state_label.configure(text="Modified, not saved" if mod else "No changes",
+                                   fg=self.p["edit"] if mod else self.p["dim"])
 
     def show_toast(self, text: str) -> None:
         self.toast.configure(text=text)
-        self.toast.place(relx=1.0, rely=1.0, x=-24, y=-16, anchor="se")
+        self.toast.place(relx=1.0, rely=1.0, x=-28, y=-22, anchor="se")
         if self._toast_job:
             self.after_cancel(self._toast_job)
         self._toast_job = self.after(1800, self.toast.place_forget)
@@ -1103,7 +1207,9 @@ def main() -> None:
             ctypes.windll.shcore.SetProcessDpiAwareness(1)
         except Exception:  # noqa: BLE001
             pass
-    App().mainloop()
+    app = App()
+    app.after(100, app._ph_show)
+    app.mainloop()
 
 
 if __name__ == "__main__":
