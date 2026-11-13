@@ -665,9 +665,138 @@ class StartDialog(tk.Toplevel if tk else object):  # type: ignore[misc]
         self.destroy()
 
 
+class ResultPanel(tk.Frame if tk else object):  # type: ignore[misc]
+    """Raw text area for pasting the result of a query next to the script."""
+
+    def __init__(self, master, palette: dict, fonts: dict, mono, on_hide, toast):
+        super().__init__(master)
+        self.fonts, self.on_hide, self.toast = fonts, on_hide, toast
+        self.head = tk.Frame(self)
+        self.head.pack(side="top", fill="x")
+        self.title = tk.Label(self.head, text="Query result", font=fonts["ui_bold"])
+        self.title.pack(side="left", padx=(18, 10), pady=6)
+        self.count = tk.Label(self.head, text="Empty", font=fonts["small"])
+        self.count.pack(side="left")
+        self.buttons = []
+        for text, cmd in (("✕", on_hide), ("Clear", self.clear), ("Copy", self.copy), ("Paste", self.paste)):
+            b = FlatButton(self.head, text, cmd, fonts["ui"], padx=10, pady=4)
+            b.pack(side="right", padx=(0, 4), pady=3)
+            self.buttons.append(b)
+        self.line = tk.Frame(self, height=1)
+        self.line.pack(side="top", fill="x")
+        body = tk.Frame(self)
+        body.pack(side="top", fill="both", expand=True)
+        body.grid_rowconfigure(0, weight=1)
+        body.grid_columnconfigure(0, weight=1)
+        self.body = body
+        self.text = tk.Text(body, wrap="none", undo=True, font=mono, bd=0, highlightthickness=0, padx=14, pady=8,
+                            spacing1=1, spacing3=1, tabs=(mono.measure("    "),))
+        vsb = ttk.Scrollbar(body, orient="vertical", command=self.text.yview, style="Thin.Vertical.TScrollbar")
+        hsb = ttk.Scrollbar(body, orient="horizontal", command=self.text.xview, style="Thin.Horizontal.TScrollbar")
+        self.text.configure(yscrollcommand=lambda f, l: _auto_scrollbar(vsb, f, l),
+                            xscrollcommand=lambda f, l: _auto_scrollbar(hsb, f, l))
+        self.text.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+        self.text.bind("<<Modified>>", self._modified)
+        self.set_palette(palette)
+
+    def set_palette(self, p: dict) -> None:
+        self.configure(bg=p["panel"])
+        self.head.configure(bg=p["bg"])
+        self.body.configure(bg=p["panel"])
+        self.line.configure(bg=p["line"])
+        self.title.configure(bg=p["bg"], fg=p["fg"])
+        self.count.configure(bg=p["bg"], fg=p["dim"])
+        for b in self.buttons:
+            b.base = "bg"
+            b.set_palette(p)
+        self.text.configure(bg=p["panel"], fg=p["fg"], insertbackground=p["fg"], selectbackground=p["sel"],
+                            selectforeground=p["fg"], inactiveselectbackground=p["sel"])
+
+    def _modified(self, _e=None) -> None:
+        if self.text.edit_modified():
+            self.text.edit_modified(False)
+            self.update_count()
+
+    def update_count(self) -> None:
+        text = self.get_text()
+        self.count.configure(text=f"{text.count(chr(10)) + 1:,} lines" if text else "Empty")
+
+    def get_text(self) -> str:
+        return self.text.get("1.0", "end-1c")
+
+    def set_text(self, text: str) -> None:
+        self.text.delete("1.0", "end")
+        self.text.insert("1.0", text)
+        self.text.edit_reset()
+        self.text.see("1.0")
+        self.update_count()
+
+    def paste(self) -> None:
+        try:
+            data = self.clipboard_get()
+        except tk.TclError:
+            data = ""
+        if not data.strip():
+            self.toast("Clipboard is empty")
+            return
+        self.set_text(data.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n"))
+        self.toast(f"Pasted {self.count.cget('text')}")
+
+    def copy(self) -> None:
+        text = self.get_text()
+        if text:
+            self.clipboard_clear()
+            self.clipboard_append(text)
+            self.toast("Copied the result")
+
+    def clear(self) -> None:
+        self.set_text("")
+
+
+class ScriptView(tk.Frame if tk else object):  # type: ignore[misc]
+    """One tab's content: the script editor, with an optional result panel split below it."""
+
+    def __init__(self, master, doc, palette, fonts, mono, on_change, on_cursor, toast):
+        super().__init__(master)
+        self.paned = tk.PanedWindow(self, orient="vertical", sashwidth=7, sashrelief="flat", bd=0,
+                                    sashcursor="sb_v_double_arrow", opaqueresize=True)
+        self.paned.pack(fill="both", expand=True)
+        self.editor = CodeEditor(self.paned, doc, palette, mono, on_change, on_cursor)
+        self.results = ResultPanel(self.paned, palette, fonts, mono, self.hide_results, toast)
+        self.paned.add(self.editor, minsize=120, stretch="always")
+        self.results_visible = False
+        self.set_palette(palette)
+
+    def set_palette(self, p: dict) -> None:
+        self.configure(bg=p["panel"])
+        self.paned.configure(bg=p["panel"])
+        self.editor.set_palette(p)
+        self.results.set_palette(p)
+
+    def show_results(self, focus: bool = True) -> None:
+        if not self.results_visible:
+            self.paned.add(self.results, minsize=90, height=max(160, self.winfo_height() // 3), stretch="never")
+            self.results_visible = True
+        if focus:
+            self.results.text.focus_set()
+
+    def hide_results(self) -> None:
+        if self.results_visible:
+            self.paned.forget(self.results)
+            self.results_visible = False
+        self.editor.text.focus_set()
+        if self.on_hidden:
+            self.on_hidden()
+
+    on_hidden = None
+
+
 class Tab:
-    def __init__(self, doc: ScriptDocument, entry: ScriptEntry, editor: CodeEditor):
-        self.doc, self.entry, self.editor = doc, entry, editor
+    def __init__(self, doc: ScriptDocument, entry: ScriptEntry, view: "ScriptView"):
+        self.doc, self.entry, self.view, self.editor = doc, entry, view, view.editor
+        self.shown_mod = False  # modified state last drawn in the tab strip and list
 
 
 class App(tk.Tk if tk else object):  # type: ignore[misc]
@@ -724,6 +853,17 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
         self.bind_all("<Control-s>", lambda _e: self.save_current())
         self.bind_all("<Control-w>", lambda _e: self.close_tab(self.current) if self.current else None)
         self.bind_all("<Control-f>", self._focus_search)
+        self.bind_all("<Control-Shift-V>", self.paste_result)
+        # tab switching as in Notepad++ (the Text widget has its own bindings for these keys)
+        for widget in ("Text", "all"):
+            self.bind_class(widget, "<Control-Tab>", lambda _e: self.switch_tab(1))
+            self.bind_class(widget, "<Control-Next>", lambda _e: self.switch_tab(1))
+            self.bind_class(widget, "<Control-Prior>", lambda _e: self.switch_tab(-1))
+            for seq in ("<Control-Shift-Tab>", "<Control-ISO_Left_Tab>"):
+                try:
+                    self.bind_class(widget, seq, lambda _e: self.switch_tab(-1))
+                except tk.TclError:  # keysym unknown on this platform
+                    pass
         self.after(60, self.startup)
 
     # ------------------------------------------------------------------ UI
@@ -826,9 +966,11 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
                                   font=F["ui_bold"], padx=16, pady=7)
         self.reset_btn = self._btn(self.actions, "Reset to original", self.reset)
         self.copy_btn = self._btn(self.actions, "Copy script", self.copy)
+        self.results_btn = self._btn(self.actions, "Results", self.toggle_results)
         self.jump_btn.pack(side="left", padx=(18, 8), pady=12)
         self.reset_btn.pack(side="left", padx=2, pady=12)
         self.copy_btn.pack(side="left", padx=2, pady=12)
+        self.results_btn.pack(side="left", padx=(14, 2), pady=12)
         self.section_label = self._s(tk.Label(self.actions, text="", font=F["small"]), bg="panel", fg="dim")
         self.section_label.pack(side="right", padx=18)
         self._hairline(right).grid(row=2, column=0, sticky="ew")
@@ -883,7 +1025,7 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
                          lightcolor=p["line"], darkcolor=p["line"], relief="flat", gripcount=0)
             st.map(name, background=[("active", p["faint"]), ("!active", p["line"])])
         for t in self.tabs:
-            t.editor.set_palette(p)
+            t.view.set_palette(p)
         self._ph_refresh()
         self._render_list()
         self._render_tabs()
@@ -1075,46 +1217,71 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
         except OSError as ex:
             self.show_toast(f"Cannot open {entry.file_name}: {ex.strerror or ex}")
             return
-        editor = CodeEditor(self.editor_host, doc, self.p, self.mono, self._on_editor_change, self._on_cursor)
-        tab = Tab(doc, entry, editor)
+        view = ScriptView(self.editor_host, doc, self.p, self.fonts, self.mono, self._on_editor_change,
+                          self._on_cursor, self.show_toast)
+        view.on_hidden = self._update_results_button
+        tab = Tab(doc, entry, view)
         self.tabs.append(tab)
         self.select_tab(tab)
 
     def select_tab(self, tab: Optional[Tab]) -> None:
         self.current = tab
         for t in self.tabs:
-            t.editor.grid_forget()
+            t.view.grid_forget()
         self.empty_state.grid_forget()
         if tab is None:
             self.empty_state.grid(row=0, column=0, sticky="nsew")
         else:
-            tab.editor.grid(row=0, column=0, sticky="nsew")
+            tab.view.grid(row=0, column=0, sticky="nsew")
             tab.editor.text.focus_set()
             self._sel_path = tab.entry.path
             self._mark_current()
         self._set_actions_enabled(tab is not None)
-        self._render_tabs()
+        self._render_tabs(reveal=True)
+        self._update_results_button()
         self._update_section_info()
         self._update_state_label()
         if tab:
             self._on_cursor(tab.editor)
 
-    def _render_tabs(self) -> None:
+    def _tab_labels(self) -> dict:
+        """Tab -> text; later copies of the same file get a number: Name (2)."""
+        copies: dict[str, int] = {}
+        labels = {}
+        for t in self.tabs:
+            copies[t.entry.path] = n = copies.get(t.entry.path, 0) + 1
+            labels[t] = os.path.splitext(t.doc.name)[0] + (f" ({n})" if n > 1 else "")
+        return labels
+
+    def _render_tabs(self, reveal: bool = False) -> None:
+        """Draw the tab strip. With many tabs it scrolls: arrow buttons, mouse wheel and a
+        drop-down list of all open tabs. reveal=True scrolls the current tab into view."""
         p, F = self.p, self.fonts
+        old = getattr(self, "_tab_canvas", None)
+        x0 = old.xview()[0] if old is not None and old.winfo_exists() else 0.0
         for w in self.tabstrip.winfo_children():
             w.destroy()
-        row = tk.Frame(self.tabstrip, bg=p["panel"])
-        row.pack(side="top", fill="x", padx=(10, 0), pady=(6, 0))
-        copies: dict[str, int] = {}
+        labels = self._tab_labels()
+
+        bar = tk.Frame(self.tabstrip, bg=p["panel"])
+        bar.pack(side="top", fill="x", pady=(6, 0))
+        ctrl = tk.Frame(bar, bg=p["panel"])
+        ctrl.pack(side="right", padx=(0, 8))
+        canvas = tk.Canvas(bar, bg=p["panel"], highlightthickness=0, bd=0, xscrollincrement=40, height=36)
+        canvas.pack(side="left", fill="x", expand=True, padx=(10, 0))
+        self._tab_canvas = canvas
+        row = tk.Frame(canvas, bg=p["panel"])
+        canvas.create_window((0, 0), window=row, anchor="nw")
+
+        boxes = {}
         for t in self.tabs:
             sel = t is self.current
-            copies[t.entry.path] = n = copies.get(t.entry.path, 0) + 1
-            label = os.path.splitext(t.doc.name)[0] + (f" ({n})" if n > 1 else "")
             box = tk.Frame(row, bg=p["panel"])
             box.pack(side="left", padx=(0, 4))
+            boxes[t] = box
             inner = tk.Frame(box, bg=p["panel"])
             inner.pack(side="top")
-            title = tk.Label(inner, text=label, bg=p["panel"], fg=p["fg"] if sel else p["dim"],
+            title = tk.Label(inner, text=labels[t], bg=p["panel"], fg=p["fg"] if sel else p["dim"],
                              font=F["ui_bold"] if sel else F["ui"], padx=8, pady=7)
             title.pack(side="left")
             dot = tk.Label(inner, text="●" if t.doc.is_modified else " ", bg=p["panel"], fg=p["edit"], font=F["small"])
@@ -1130,6 +1297,75 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
                 w.bind("<Button-1>", lambda _e, tab=t: self.select_tab(tab))
                 w.bind("<Button-2>", lambda _e, tab=t: self.close_tab(tab))
                 w.bind("<Button-3>", lambda e, tab=t: self._tab_menu(e, tab))
+
+        # scroll controls (shown only when the tabs do not fit)
+        def small_btn(text, command):
+            b = FlatButton(ctrl, text, command, F["ui"], padx=8, pady=5)
+            b.set_palette(p)
+            return b
+
+        left_b = small_btn("◀", lambda: canvas.xview_scroll(-3, "units"))
+        right_b = small_btn("▶", lambda: canvas.xview_scroll(3, "units"))
+        list_b = small_btn("▾", lambda: self._tab_list_menu(list_b, labels))
+        if len(self.tabs) >= 2:
+            list_b.pack(side="left")
+
+        def wheel(event):
+            step = -1 if (getattr(event, "num", 0) == 4 or getattr(event, "delta", 0) > 0) else 1
+            canvas.xview_scroll(step * 3, "units")
+            return "break"
+
+        def bind_wheel(w):
+            for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                # a fresh lambda per sequence: Tkinter names Tcl commands after the function,
+                # so sharing one function across bindings breaks widget destruction
+                w.bind(seq, lambda e: wheel(e))
+            for c in w.winfo_children():
+                bind_wheel(c)
+
+        bind_wheel(canvas)
+
+        state = {"first": True}
+
+        def layout(_e=None) -> None:
+            if not canvas.winfo_exists():
+                return
+            row.update_idletasks()
+            total, h = row.winfo_reqwidth(), row.winfo_reqheight()
+            width = canvas.winfo_width()
+            canvas.configure(scrollregion=(0, 0, total, h), height=h)
+            overflow = total > width > 1
+            if overflow and not left_b.winfo_ismapped():
+                opts = {"before": list_b} if len(self.tabs) >= 2 else {}
+                left_b.pack(side="left", **opts)
+                right_b.pack(side="left", **opts)
+            elif not overflow and left_b.winfo_ismapped():
+                left_b.pack_forget()
+                right_b.pack_forget()
+            if state["first"] and width > 1:
+                state["first"] = False
+                cur = boxes.get(self.current)
+                if not overflow:
+                    canvas.xview_moveto(0)
+                elif reveal and cur is not None:
+                    left, bx, bw = canvas.canvasx(0), cur.winfo_x(), cur.winfo_reqwidth()
+                    if bx < left:
+                        canvas.xview_moveto(bx / total)
+                    elif bx + bw > left + width:
+                        canvas.xview_moveto((bx + bw - width) / total)
+                else:
+                    canvas.xview_moveto(x0)
+
+        canvas.bind("<Configure>", layout)
+        canvas.after_idle(layout)
+
+    def _tab_list_menu(self, anchor, labels: dict) -> None:
+        """Drop-down with every open tab, so none can get lost."""
+        m = tk.Menu(self, tearoff=0)
+        for t in self.tabs:
+            text = ("✓  " if t is self.current else "     ") + labels[t] + ("  ●" if t.doc.is_modified else "")
+            m.add_command(label=text, command=lambda tab=t: self.select_tab(tab))
+        m.tk_popup(anchor.winfo_rootx(), anchor.winfo_rooty() + anchor.winfo_height())
 
     def _tab_menu(self, event, tab: Tab) -> None:
         m = tk.Menu(self, tearoff=0)
@@ -1152,7 +1388,7 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
                 return False
         i = self.tabs.index(tab)
         self.tabs.remove(tab)
-        tab.editor.destroy()
+        tab.view.destroy()
         if self.current is tab:
             self.select_tab(self.tabs[min(i, len(self.tabs) - 1)] if self.tabs else None)
         else:
@@ -1168,8 +1404,36 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
 
     # ------------------------------------------------------------- actions
     def _set_actions_enabled(self, on: bool) -> None:
-        for b in (self.jump_btn, self.reset_btn, self.copy_btn):
+        for b in (self.jump_btn, self.reset_btn, self.copy_btn, self.results_btn):
             b.set_enabled(on)
+
+    def toggle_results(self) -> None:
+        """Split the screen: show or hide the result area below the script."""
+        if not self.current:
+            return
+        view = self.current.view
+        if view.results_visible:
+            view.hide_results()
+        else:
+            view.show_results()
+        self._update_results_button()
+
+    def paste_result(self, _e=None):
+        """Ctrl+Shift+V: paste the clipboard into the result area of the current script."""
+        if self.current:
+            self.current.view.show_results(focus=False)
+            self.current.view.results.paste()
+            self._update_results_button()
+        return "break"
+
+    def _update_results_button(self) -> None:
+        shown = bool(self.current and self.current.view.results_visible)
+        self.results_btn.configure(text="Hide results" if shown else "Results")
+
+    def switch_tab(self, step: int):
+        if len(self.tabs) > 1 and self.current in self.tabs:
+            self.select_tab(self.tabs[(self.tabs.index(self.current) + step) % len(self.tabs)])
+        return "break"
 
     def jump(self) -> None:
         if self.current and self.current.editor.jump():
@@ -1196,6 +1460,7 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
         except OSError as ex:
             self.show_toast(f"Cannot save: {ex.strerror or ex}")
             return False
+        tab.shown_mod = False
         self._render_tabs()
         self._render_list()
         self._update_state_label()
@@ -1208,11 +1473,16 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
 
     # ----------------------------------------------------------- callbacks
     def _on_editor_change(self, editor: CodeEditor) -> None:
-        if self.current and self.current.editor is editor:
+        tab = next((t for t in self.tabs if t.editor is editor), None)
+        if tab is None:
+            return
+        if tab is self.current:
             self._update_section_info()
             self._update_state_label()
-        self._render_tabs()
-        self._render_list()
+        if tab.doc.is_modified != tab.shown_mod:  # redraw only when the dot appears or disappears
+            tab.shown_mod = tab.doc.is_modified
+            self._render_tabs()
+            self._render_list()
 
     def _on_cursor(self, editor: CodeEditor) -> None:
         if self.current and self.current.editor is editor:
