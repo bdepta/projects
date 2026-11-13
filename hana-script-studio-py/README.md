@@ -32,7 +32,7 @@ No `pip install` is needed. To uninstall, delete the file. Settings live in `%AP
 
 1. **Start.** The app asks for the folder with your scripts. The field is pre-filled with the folder you used last time, so you usually just press **Enter**. Use **Browse…** to pick a folder, or type or paste a path. All `.txt` and `.sql` files in the folder and its subfolders are loaded. **Change folder** (top right) opens the same window later.
 2. **Search.** Type a word in the search box on the left. The list narrows as you type and shows only scripts whose **file name** contains it. With several words, all of them must appear in the name. The matching part of each name is shown in **bold blue**. Shortcut: **Ctrl+F**. Script contents are not searched.
-3. **Open scripts.** The list shows full file names. Drag the thin divider between the list and the editor to make the list wider or narrower. Click a script (or select it with the arrow keys and press Enter) to open it in a new tab. You can keep many scripts open. A dot next to a name (in the tab and in the list) means unsaved changes.
+3. **Open scripts.** The list shows full file names. Drag the thin divider between the list and the editor to make the list wider or narrower. Click a script (or select it with the arrow keys and press Enter) to open it in a new tab. Opening a script that is already open switches to its tab. To work on the same script several times at once (for example with different parameters), **Ctrl+click** it (or press **Ctrl+Enter**, or right-click and choose **Open in a new tab**). Each copy is independent and its tab is numbered, e.g. `HANA_Memory_Overview (2)`. Saving a copy writes it to the file, so save only the one you want to keep. You can keep many scripts open. A dot next to a name (in the tab and in the list) means unsaved changes.
 4. **Edit.** Change the script in the editor. The modification section has a soft orange background and an orange mark next to the line numbers. The slim bar at the right edge of the editor shows where the section sits in the file. Click it to jump there.
 5. **Buttons above the editor:**
    - **Go to modification section** moves the cursor to the `Modification section` line.
@@ -40,7 +40,7 @@ No `pip install` is needed. To uninstall, delete the file. Settings live in `%AP
    - **Copy script** copies the whole, current (edited) script to the clipboard. Paste it into the tool where you run your SQL, such as SAP HANA Studio, HANA Cockpit or DBeaver.
 6. **Save.** Edits are a working copy only. **Ctrl+S** writes them to the file, keeping its original encoding and line endings. If you close a tab or the window with unsaved changes, the app asks what to do.
 
-Shortcuts: `Ctrl+F` search, `Ctrl+S` save, `Ctrl+W` close tab, `Ctrl+Z` / `Ctrl+Y` undo / redo. A tab also closes with the ✕ or a middle click.
+Shortcuts: `Ctrl+click` open another copy, `Ctrl+F` search, `Ctrl+S` save, `Ctrl+W` close tab, `Ctrl+Z` / `Ctrl+Y` undo / redo. A tab also closes with the ✕ or a middle click.
 
 The **Dark theme / Light theme** button in the top right switches the look. The choice is remembered.
 

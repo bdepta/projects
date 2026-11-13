@@ -15,7 +15,9 @@ import json
 import os
 import queue
 import re
+import struct
 import sys
+import tempfile
 import threading
 from dataclasses import dataclass
 from typing import Optional
@@ -322,6 +324,19 @@ dZEytNjwgx0HllYm4l8JhwJ/laiMz4qFzs4q2kzB0NeX6srknd8OpLM/vuqSuvUjaZnSTdLI0tl129qS
 XabE1IIE/9QOgy/QyjGYDs/IrrxnbW64ZHbXEHmX0y6mPp+Lp9UUP6yKoJ+tJRXCFMvn/x/KOz4SZm/u9wAAAABJ
 RU5ErkJggg==
 """
+
+
+def _write_ico(png: bytes) -> Optional[str]:
+    """Wrap a PNG into a one-image .ico file (Windows needs a real icon file for the taskbar)."""
+    try:
+        w, h = struct.unpack(">II", png[16:24])
+        entry = struct.pack("<BBBBHHII", w % 256, h % 256, 0, 0, 1, 32, len(png), 22)
+        path = os.path.join(tempfile.gettempdir(), "HanaScriptStudio.ico")
+        with open(path, "wb") as f:
+            f.write(struct.pack("<HHH", 0, 1, 1) + entry + png)
+        return path
+    except (OSError, struct.error):
+        return None
 
 
 def _first_font(candidates: tuple[str, ...], default: str) -> str:
@@ -677,11 +692,19 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
         self.title(APP_NAME)
         self.geometry("1280x800")
         self.minsize(900, 540)
+        png = base64.b64decode("".join(ICON_PNG_B64.split()))
         try:
-            self._icon = tk.PhotoImage(data=base64.b64decode("".join(ICON_PNG_B64.split())))
+            self._icon = tk.PhotoImage(data=png)
             self.iconphoto(True, self._icon)
         except tk.TclError:
             pass
+        if sys.platform == "win32":  # taskbar and title bar icon
+            ico = _write_ico(png)
+            if ico:
+                try:
+                    self.iconbitmap(default=ico)
+                except tk.TclError:
+                    pass
 
         ui = _first_font(("Segoe UI", "SF Pro Text", "Noto Sans", "DejaVu Sans"), "TkDefaultFont")
         mono = _first_font(("Cascadia Mono", "Consolas", "Menlo", "DejaVu Sans Mono", "Liberation Mono"), "TkFixedFont")
@@ -780,6 +803,9 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
         self.list_hsb.grid(row=1, column=0, sticky="ew")
         self.empty_label = self._s(tk.Label(wrap, text="", font=F["ui"], wraplength=300, justify="left"), bg="panel", fg="dim")
         self.list.bind("<Button-1>", self._on_list_click)
+        self.list.bind("<Control-Button-1>", lambda e: self._on_list_click(e, new_copy=True))
+        self.list.bind("<Button-3>", self._on_list_menu)
+        self.list.bind("<Control-Return>", lambda _e: (self._open_selected(new_copy=True), "break")[1])
         self.list.bind("<B1-Motion>", lambda _e: "break")
         self.list.bind("<Double-Button-1>", lambda _e: "break")
         self.list.bind("<Up>", lambda _e: (self._move_selection(-1), "break")[1])
@@ -815,7 +841,7 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
         self.empty_state.grid(row=0, column=0, sticky="nsew")
         self._s(tk.Label(self.empty_state, text="Open a script to start", font=F["title"]),
                 bg="panel", fg="fg").place(relx=0.5, rely=0.42, anchor="center")
-        self._s(tk.Label(self.empty_state, text="Pick a script from the list. You can keep several open in tabs.",
+        self._s(tk.Label(self.empty_state, text="Click a script to open it. Ctrl+click opens another copy of a script that is already open.",
                          font=F["ui"]), bg="panel", fg="dim").place(relx=0.5, rely=0.47, anchor="n")
         self.toast = self._s(tk.Label(self.editor_host, text="", font=F["ui"], padx=16, pady=9), bg="fg", fg="panel")
 
@@ -998,13 +1024,27 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
                 t.see(f"{n}.0")
                 break
 
-    def _on_list_click(self, event):
-        self.list.focus_set()
+    def _row_entry(self, event) -> Optional[ScriptEntry]:
         n = int(self.list.index(f"@{event.x},{event.y}").split(".")[0])
-        if 1 <= n <= len(self._visible):
-            self._sel_path = self._visible[n - 1].path
+        return self._visible[n - 1] if 1 <= n <= len(self._visible) else None
+
+    def _on_list_click(self, event, new_copy: bool = False):
+        self.list.focus_set()
+        entry = self._row_entry(event)
+        if entry:
+            self._sel_path = entry.path
             self._mark_current()
-            self.open_script(self._visible[n - 1])
+            self.open_script(entry, new_copy=new_copy)
+        return "break"
+
+    def _on_list_menu(self, event):
+        entry = self._row_entry(event)
+        if entry:
+            m = tk.Menu(self, tearoff=0)
+            m.add_command(label="Open", command=lambda: self.open_script(entry))
+            m.add_command(label="Open in a new tab (another copy)",
+                          command=lambda: self.open_script(entry, new_copy=True))
+            m.tk_popup(event.x_root, event.y_root)
         return "break"
 
     def _move_selection(self, delta: int) -> None:
@@ -1015,18 +1055,21 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
         self._sel_path = paths[max(0, min(len(paths) - 1, i + delta))]
         self._mark_current()
 
-    def _open_selected(self) -> None:
+    def _open_selected(self, new_copy: bool = False) -> None:
         for e in self._visible:
             if e.path == self._sel_path:
-                self.open_script(e)
+                self.open_script(e, new_copy=new_copy)
                 return
 
     # ---------------------------------------------------------------- tabs
-    def open_script(self, entry: ScriptEntry) -> None:
-        for t in self.tabs:
-            if t.entry.path == entry.path:
-                self.select_tab(t)
-                return
+    def open_script(self, entry: ScriptEntry, new_copy: bool = False) -> None:
+        """Open a script in a tab. If it is already open, switch to it, unless new_copy is set:
+        then a second, independent copy opens (handy for trying different parameters)."""
+        if not new_copy:
+            for t in self.tabs:
+                if t.entry.path == entry.path:
+                    self.select_tab(t)
+                    return
         try:
             doc = ScriptDocument(entry.path)
         except OSError as ex:
@@ -1062,13 +1105,16 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
             w.destroy()
         row = tk.Frame(self.tabstrip, bg=p["panel"])
         row.pack(side="top", fill="x", padx=(10, 0), pady=(6, 0))
+        copies: dict[str, int] = {}
         for t in self.tabs:
             sel = t is self.current
+            copies[t.entry.path] = n = copies.get(t.entry.path, 0) + 1
+            label = os.path.splitext(t.doc.name)[0] + (f" ({n})" if n > 1 else "")
             box = tk.Frame(row, bg=p["panel"])
             box.pack(side="left", padx=(0, 4))
             inner = tk.Frame(box, bg=p["panel"])
             inner.pack(side="top")
-            title = tk.Label(inner, text=os.path.splitext(t.doc.name)[0], bg=p["panel"], fg=p["fg"] if sel else p["dim"],
+            title = tk.Label(inner, text=label, bg=p["panel"], fg=p["fg"] if sel else p["dim"],
                              font=F["ui_bold"] if sel else F["ui"], padx=8, pady=7)
             title.pack(side="left")
             dot = tk.Label(inner, text="●" if t.doc.is_modified else " ", bg=p["panel"], fg=p["edit"], font=F["small"])
@@ -1087,6 +1133,8 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
 
     def _tab_menu(self, event, tab: Tab) -> None:
         m = tk.Menu(self, tearoff=0)
+        m.add_command(label="Open another copy", command=lambda: self.open_script(tab.entry, new_copy=True))
+        m.add_separator()
         m.add_command(label="Close", command=lambda: self.close_tab(tab))
         m.add_command(label="Close all", command=self._close_all_tabs)
         m.tk_popup(event.x_root, event.y_root)
@@ -1205,6 +1253,11 @@ def main() -> None:
         try:
             import ctypes
             ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except Exception:  # noqa: BLE001
+            pass
+        try:  # own taskbar group, so Windows shows our icon instead of python.exe's
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("HanaScriptStudio.App")
         except Exception:  # noqa: BLE001
             pass
     app = App()
